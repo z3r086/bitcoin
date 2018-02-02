@@ -29,6 +29,8 @@
 #include <util.h>
 #include <utilmoneystr.h>
 #include <utilstrencodings.h>
+#include <time.h>
+
 
 #if defined(NDEBUG)
 # error "Bitcoin cannot be compiled without assertions."
@@ -129,9 +131,12 @@ namespace {
     /** When our tip was last updated. */
     int64_t g_last_tip_update = 0;
 
-    /** Relay map, protected by cs_main. */
+    /** Nodes who've heard of transaction from us. */
+    std::map<uint256, std::vector<NodeId>> ackNodes;
+
     typedef std::map<uint256, CTransactionRef> MapRelay;
     MapRelay mapRelay;
+
     /** Expiration-time ordered list of (expire time, relay map entry) pairs, protected by cs_main). */
     std::deque<std::pair<int64_t, MapRelay::iterator>> vRelayExpiration;
 } // namespace
@@ -1196,6 +1201,17 @@ void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParam
                 }
                 if (!push) {
                     vNotFound.push_back(inv);
+                } else {
+                    // TODO G: add peers list
+                    LogPrint(BCLog::NET, "Node %s heard: %s\n",
+                             pfrom->GetId(),
+                             inv.hash.ToString()
+                    );
+
+//                    auto txAckNodes = ackNodes.find(inv.hash);
+//                    auto nodesList = txAckNodes->second;
+//                    connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TXACKPEERS, nodesList));
+//                    nodesList.push_back(pfrom->GetId());
                 }
             }
 
@@ -1465,7 +1481,7 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
     return true;
 }
 
-bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStream& vRecv, int64_t nTimeReceived, const CChainParams& chainparams, CConnman* connman, const std::atomic<bool>& interruptMsgProc)
+bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStream& vRecv, int64_t nTimeReceived, const CChainParams& chainparams, CConnman* connman, const std::atomic<bool>& interruptMsgProc, std::string& invTxHash, bool& alreadyHave)
 {
     LogPrint(BCLog::NET, "received: %s (%u bytes) peer=%d\n", SanitizeString(strCommand), vRecv.size(), pfrom->GetId());
     if (gArgs.IsArgSet("-dropmessagestest") && GetRand(gArgs.GetArg("-dropmessagestest", 0)) == 0)
@@ -1855,8 +1871,11 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             bool fAlreadyHave = AlreadyHave(inv);
             LogPrint(BCLog::NET, "got inv: %s  %s peer=%d\n", inv.ToString(), fAlreadyHave ? "have" : "new", pfrom->GetId());
 
+
             if (inv.type == MSG_TX) {
                 inv.type |= nFetchFlags;
+                invTxHash = inv.hash.ToString();
+                alreadyHave = fAlreadyHave;
             }
 
             if (inv.type == MSG_BLOCK) {
@@ -2444,8 +2463,10 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         }
         } // cs_main
 
+        std::string tmp;
+        bool tmp2;
         if (fProcessBLOCKTXN)
-            return ProcessMessage(pfrom, NetMsgType::BLOCKTXN, blockTxnMsg, nTimeReceived, chainparams, connman, interruptMsgProc);
+            return ProcessMessage(pfrom, NetMsgType::BLOCKTXN, blockTxnMsg, nTimeReceived, chainparams, connman, interruptMsgProc, tmp, tmp2);
 
         if (fRevertToHeaderProcessing) {
             // Headers received from HB compact block peers are permitted to be
@@ -2899,6 +2920,16 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         pfrom->fPauseRecv = pfrom->nProcessQueueSize > connman->GetReceiveFloodSize();
         fMoreWork = !pfrom->vProcessMsg.empty();
     }
+
+    struct timespec start, stop;
+    std::string invTxHash;
+    bool alreadyHave;
+
+    if( clock_gettime( CLOCK_REALTIME, &start) == -1 ) {
+        perror( "clock gettime" );
+        exit( EXIT_FAILURE );
+    }
+
     CNetMessage& msg(msgs.front());
 
     msg.SetVersion(pfrom->GetRecvVersion());
@@ -2908,6 +2939,8 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         pfrom->fDisconnect = true;
         return false;
     }
+
+
 
     // Read header
     CMessageHeader& hdr = msg.hdr;
@@ -2937,7 +2970,10 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
     bool fRet = false;
     try
     {
-        fRet = ProcessMessage(pfrom, strCommand, vRecv, msg.nTime, chainparams, connman, interruptMsgProc);
+        // TODO G MEASURE EFFORT
+
+        fRet = ProcessMessage(pfrom, strCommand, vRecv, msg.nTime, chainparams, connman, interruptMsgProc, invTxHash, alreadyHave);
+
         if (interruptMsgProc)
             return false;
         if (!pfrom->vRecvGetData.empty())
@@ -2978,6 +3014,18 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
 
     LOCK(cs_main);
     SendRejectsAndCheckIfBanned(pfrom, connman);
+
+    if( clock_gettime( CLOCK_REALTIME, &stop) == -1 ) {
+        perror( "clock gettime" );
+        exit( EXIT_FAILURE );
+    }
+
+    double accum = ( stop.tv_sec - start.tv_sec ) * 1000
+                   + ( stop.tv_nsec - start.tv_nsec )
+                     / 1000000;
+    if (!invTxHash.empty())
+        LogPrint(BCLog::NET, "message processing time: %lf, txtype: %s, txhash: %s, now: %lf, peer: %d, alreadyHave: %b\n",
+                 accum, strCommand, invTxHash, stop.tv_sec, pfrom->GetId(), alreadyHave);
 
     return fMoreWork;
 }
