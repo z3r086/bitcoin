@@ -1481,7 +1481,7 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
     return true;
 }
 
-bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStream& vRecv, int64_t nTimeReceived, const CChainParams& chainparams, CConnman* connman, const std::atomic<bool>& interruptMsgProc, std::string& invTxHash, bool& alreadyHave)
+bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStream& vRecv, int64_t nTimeReceived, const CChainParams& chainparams, CConnman* connman, const std::atomic<bool>& interruptMsgProc, std::string& txHash, bool& alreadyHave)
 {
     LogPrint(BCLog::NET, "received: %s (%u bytes) peer=%d\n", SanitizeString(strCommand), vRecv.size(), pfrom->GetId());
     if (gArgs.IsArgSet("-dropmessagestest") && GetRand(gArgs.GetArg("-dropmessagestest", 0)) == 0)
@@ -1874,7 +1874,8 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
             if (inv.type == MSG_TX) {
                 inv.type |= nFetchFlags;
-                invTxHash = inv.hash.ToString();
+
+                txHash = inv.hash.ToString();
                 alreadyHave = fAlreadyHave;
             }
 
@@ -2120,7 +2121,12 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         CInv inv(MSG_TX, tx.GetHash());
         pfrom->AddInventoryKnown(inv);
 
+        txHash = inv.hash.ToString();
+
         LOCK(cs_main);
+
+        alreadyHave = AlreadyHave(inv);
+
 
         bool fMissingInputs = false;
         CValidationState state;
@@ -2130,7 +2136,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
         std::list<CTransactionRef> lRemovedTxn;
 
-        if (!AlreadyHave(inv) &&
+        if (!alreadyHave &&
             AcceptToMemoryPool(mempool, state, ptx, &fMissingInputs, &lRemovedTxn, false /* bypass_limits */, 0 /* nAbsurdFee */)) {
             mempool.check(pcoinsTip.get());
             RelayTransaction(tx, connman);
@@ -2922,8 +2928,9 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
     }
 
     struct timespec start, stop;
-    std::string invTxHash;
+    std::string txHash;
     bool alreadyHave;
+
 
     if( clock_gettime( CLOCK_REALTIME, &start) == -1 ) {
         perror( "clock gettime" );
@@ -2971,8 +2978,7 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
     try
     {
         // TODO G MEASURE EFFORT
-
-        fRet = ProcessMessage(pfrom, strCommand, vRecv, msg.nTime, chainparams, connman, interruptMsgProc, invTxHash, alreadyHave);
+        fRet = ProcessMessage(pfrom, strCommand, vRecv, msg.nTime, chainparams, connman, interruptMsgProc, txHash, alreadyHave);
 
         if (interruptMsgProc)
             return false;
@@ -3023,9 +3029,9 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
     double accum = ( stop.tv_sec - start.tv_sec ) * 1000
                    + ( stop.tv_nsec - start.tv_nsec )
                      / 1000000;
-    if (!invTxHash.empty())
-        LogPrint(BCLog::NET, "message processing time: %lf, txtype: %s, txhash: %s, now: %lf, peer: %d, alreadyHave: %b\n",
-                 accum, strCommand, invTxHash, stop.tv_sec, pfrom->GetId(), alreadyHave);
+    if (strCommand == NetMsgType::INV || strCommand == NetMsgType::TX)
+        LogPrint(BCLog::NET, "message processing time: %lf, msgtype: %s, txhash: %s, now: %lf, peer: %d, alreadyHave: %b, msgsize: %u\n",
+                 accum, strCommand, txHash, stop.tv_sec, pfrom->GetId(), alreadyHave, nMessageSize);
 
     return fMoreWork;
 }

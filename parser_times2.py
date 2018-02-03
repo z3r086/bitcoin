@@ -6,11 +6,14 @@ import sys
 
 filename = sys.argv[1]
 
-regexp_message = re.compile("message processing (.*)")
+regexp_message = re.compile("message (.*)")
+regexp_msgtype = re.compile("msgtype: (.*)")
 regexp_txhash = re.compile("txhash: (.*)")
+regexp_time = re.compile("time: (.*)")
 regexp_timestamp = re.compile("now: (.*)")
 regexp_peer = re.compile("peer: (.*)")
 regexp_already_have = re.compile("alreadyHave: (.*)")
+regexp_size = re.compile("msgsize: (.*)")
 
 
 def parseValue(data, regexp):
@@ -18,6 +21,9 @@ def parseValue(data, regexp):
     if matches:
         return matches.group(1)
     return ""
+
+full_tx_processing_times = []
+full_tx_sizes = []
 
 tx_processing_times = dict()
 tx_timestamps = dict()
@@ -33,41 +39,40 @@ with open(filename) as f:
     while line:
         data = parseValue(line, regexp_message)
         if data:
-            timedata, txtypedata, txhashdata, txtimestampdata, txpeerdata, txalreadyhave = data.split(", ")
-            txtype = txtypedata.split(": ")[1]
-            if txtype != "inv":
-                pass
-            time = timedata.split(": ")[1]
+            timedata, msgtypedata, txhashdata, txtimestampdata, txpeerdata, txalreadyhave, msgsizedata = data.split(", ")
+            msgtype = parseValue(msgtypedata, regexp_msgtype)
+            time = parseValue(timedata, regexp_time)
             txhash = parseValue(txhashdata, regexp_txhash)
             timestamp = parseValue(txtimestampdata, regexp_timestamp)
             peer = parseValue(txpeerdata, regexp_peer)
             already_have = parseValue(txalreadyhave, regexp_already_have)
+            msg_size = parseValue(msgsizedata, regexp_size)
             if txhash == "" or timestamp == "":
                 print(txhashdata)
                 pass
-            if not tx_processing_times.get(txhash):
-                tx_timestamps[txhash] = timestamp
-                tx_processing_times[txhash] = []
-            tx_processing_times[txhash].append(float(time))
+            if msgtype == "tx":
+                full_tx_processing_times.append(float(time))
+                full_tx_sizes.append(int(msg_size))
+            elif msgtype == "inv":
+                if not tx_processing_times.get(txhash):
+                    tx_timestamps[txhash] = timestamp
+                    tx_processing_times[txhash] = []
+                tx_processing_times[txhash].append(float(time))
 
-            if not tx_peers.get(txhash):
-                tx_peers[txhash] = []
-            tx_peers[txhash].append(peer)
+                if not tx_peers.get(txhash):
+                    tx_peers[txhash] = []
+                tx_peers[txhash].append(peer)
 
-            if already_have == '0':
-                first_time_times.append(float(time))
-            else:
-                dup_times.append(float(time))
-
-
-
-
+                if already_have == '0':
+                    first_time_times.append(float(time))
+                else:
+                    dup_times.append(float(time))
         line = f.readline()
 
 
 
 totals = [0]*10
-times_between_messages = []
+times_between_dups_and_orig = []
 
 processing_times = []
 
@@ -84,10 +89,10 @@ for key in sorted(tx_processing_times, key = lambda hash: len(tx_processing_time
     processing_times.extend(v)
 
     ordered_times = sorted(v)
-    for i in range (len(ordered_times)-2, 0):
-        ordered_times[i+1] -= ordered_times[i]
-    ordered_times[0] = 0
-    times_between_messages.extend(ordered_times[1:])
+    first_time_heard = ordered_times[0]
+    for i in range (1, ):
+        ordered_times[i] -= first_time_heard
+    times_between_dups_and_orig.extend(ordered_times[1:])
 
     for peer in tx_peers[key]:
         if not peers_duplicates.get(peer):
@@ -104,7 +109,7 @@ print("Totals: {totals}".format(totals=totals))
 
 
 total_times_between = [0] * 50
-for time in times_between_messages:
+for time in times_between_dups_and_orig:
     total_times_between[int(time)] += 1
 
 
@@ -115,18 +120,26 @@ for time in processing_times:
 
 
 
+# Fix to show time after 1st message
 print("Times between messages: {times}".format(times=total_times_between))
-print("Average time between messages: {avg_time}".format(avg_time=sum(times_between_messages)/len(times_between_messages)))
+print("Average time between messages: {avg_time}".format(avg_time=sum(times_between_dups_and_orig)/len(times_between_dups_and_orig)))
 
 
+# Add also regular message processing
+# And bandwidth
+# And on mainnet
 print("Times processing messages: {times}".format(times=total_processing_times))
-print("Average processing time: {avg_time}".format(avg_time=sum(processing_times)/len(processing_times)))
+print("Average processing time: {avg_time} ms".format(avg_time=sum(processing_times)/len(processing_times)))
+
+print("Average processing time (fulltx): {avg_time} ms"
+      .format(avg_time=sum(full_tx_processing_times)/len(full_tx_processing_times)))
+print("Average message size (fulltx): {avg_size} bytes"
+      .format(avg_size=sum(full_tx_sizes)/len(full_tx_sizes)))
 
 
 
-
-print("Average processing time for !dup!: {avg_time}".format(avg_time=sum(dup_times)/len(dup_times)))
-print("Average processing time for !first!: {avg_time}".format(avg_time=sum(first_time_times)/len(first_time_times)))
+print("Average processing time for !dup!: {avg_time} ms".format(avg_time=sum(dup_times)/len(dup_times)))
+print("Average processing time for !first!: {avg_time} ms".format(avg_time=sum(first_time_times)/len(first_time_times)))
 
 
 for key in peers_duplicates:
