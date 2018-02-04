@@ -129,17 +129,17 @@ print("Average time between messages: {avg_time}".format(avg_time=sum(times_betw
 # And bandwidth
 # And on mainnet
 print("Times processing messages: {times}".format(times=total_processing_times))
-print("Average processing time: {avg_time} ms".format(avg_time=sum(processing_times)/len(processing_times)))
+print("Average processing time: {avg_time} microseconds".format(avg_time=sum(processing_times)/len(processing_times)))
 
-print("Average processing time (fulltx): {avg_time} ms"
+print("Average processing time (fulltx): {avg_time} microseconds"
       .format(avg_time=sum(full_tx_processing_times)/len(full_tx_processing_times)))
 print("Average message size (fulltx): {avg_size} bytes"
       .format(avg_size=sum(full_tx_sizes)/len(full_tx_sizes)))
 
 
 
-print("Average processing time for !dup!: {avg_time} ms".format(avg_time=sum(dup_times)/len(dup_times)))
-print("Average processing time for !first!: {avg_time} ms".format(avg_time=sum(first_time_times)/len(first_time_times)))
+print("Average processing time for !dup!: {avg_time} microseconds".format(avg_time=sum(dup_times)/len(dup_times)))
+print("Average processing time for !first!: {avg_time} microseconds".format(avg_time=sum(first_time_times)/len(first_time_times)))
 
 
 for key in peers_duplicates:

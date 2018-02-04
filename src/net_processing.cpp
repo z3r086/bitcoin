@@ -3028,7 +3028,7 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
 
     double accum = ( stop.tv_sec - start.tv_sec ) * 1000000
                    + ( stop.tv_nsec - start.tv_nsec )
-                     / 100;
+                     / 1000;
     if (strCommand == NetMsgType::INV || strCommand == NetMsgType::TX)
         LogPrint(BCLog::NET, "message processing time: %lf, msgtype: %s, txhash: %s, now: %lf, peer: %d, alreadyHave: %b, msgsize: %u\n",
                  accum, strCommand, txHash, stop.tv_sec, pfrom->GetId(), alreadyHave, nMessageSize);
