@@ -6,7 +6,7 @@ import sys
 
 filename = sys.argv[1]
 
-regexp_message = re.compile("message (.*)")
+regexp_message = re.compile("message processing (.*)")
 regexp_msgtype = re.compile("msgtype: (.*)")
 regexp_txhash = re.compile("txhash: (.*)")
 regexp_time = re.compile("time: (.*)")
