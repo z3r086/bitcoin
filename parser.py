@@ -17,11 +17,12 @@ with open(filename) as f:
     while line:
         matches = regexp.search(line)
         if matches:
-	    total += 1
-	    hash = matches.group(1)
-	    if hash in txlist:
-		duplicates += 1
-	    txlist.add(hash)
+            total += 1
+            hash = matches.group(1)
+            if hash in txlist:
+                duplicates += 1
+            txlist.add(hash)
+            print(line)
 	line = f.readline()
 
 print('Total: ' + str(total))
