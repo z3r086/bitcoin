@@ -39,6 +39,7 @@ with open(filename) as f:
     while line:
         data = parseValue(line, regexp_message)
         if data:
+            # print(data)
             timedata, msgtypedata, txhashdata, txtimestampdata, txpeerdata, txalreadyhave, msgsizedata = data.split(", ")
             msgtype = parseValue(msgtypedata, regexp_msgtype)
             time = parseValue(timedata, regexp_time)
@@ -66,7 +67,6 @@ with open(filename) as f:
                 if already_have == '0':
                     first_time_times.append(float(time))
                 else:
-		    print('already have')
                     dup_times.append(float(time))
         line = f.readline()
 
@@ -121,28 +121,25 @@ for time in processing_times:
 
 
 
-# Fix to show time after 1st message
 print("Times btw messages distribution in ms: {times}".format(times=total_times_between))
-print("Average time between messages: {avg_time}".format(avg_time=sum(times_between_dups_and_orig)/len(times_between_dups_and_orig)))
+print("Average time between messages: {avg_time} microseconds".format(avg_time=sum(times_between_dups_and_orig)/len(times_between_dups_and_orig)))
 
 
 # Add also regular message processing
 # And bandwidth
 # And on mainnet
 print("Average processing time: {avg_time} microseconds".format(avg_time=sum(processing_times)/len(processing_times)))
-print("Times processing messages distribution in ms: {times}".format(times=total_processing_times))
+print("Times processing messages distribution in microseconds: {times}".format(times=total_processing_times))
 
-#print("Average processing time (fulltx): {avg_time} microseconds"
-#     .format(avg_time=sum(full_tx_processing_times)/len(full_tx_processing_times)))
-#print("Average message size (fulltx): {avg_size} bytes"
-#      .format(avg_size=sum(full_tx_sizes)/len(full_tx_sizes)))
+print("Average processing time (fulltx): {avg_time} microseconds"
+     .format(avg_time=sum(full_tx_processing_times)/len(full_tx_processing_times)))
+print("Average message size (fulltx): {avg_size} bytes"
+      .format(avg_size=sum(full_tx_sizes)/len(full_tx_sizes)))
 
 
-print("Dups")
-print(dup_times)
-# print("Average processing time for !dup!: {avg_time} microseconds".format(avg_time=sum(dup_times)/len(dup_times)))
+print("Average processing time for !dup!: {avg_time} microseconds".format(avg_time=sum(dup_times)/len(dup_times)))
 print("Average processing time for !first!: {avg_time} microseconds".format(avg_time=sum(first_time_times)/len(first_time_times)))
 
 
-for key in peers_duplicates:
-    print("Peer {peer} duplicate-wise: {dups}".format(peer=key, dups=peers_duplicates[key]))
+#for key in peers_duplicates:
+#    print("Peer {peer} duplicate-wise: {dups}".format(peer=key, dups=peers_duplicates[key]))
