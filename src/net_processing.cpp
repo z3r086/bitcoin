@@ -3025,7 +3025,7 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
     }
 
     if (!fRet) {
-        LogPrint(BCLog::NET, "!fRet $s\n", txHash);
+        LogPrint(BCLog::NET, "!fRet %s\n", txHash);
         LogPrint(BCLog::NET, "%s(%s, %u bytes) FAILED peer=%d\n", __func__, SanitizeString(strCommand), nMessageSize, pfrom->GetId());
     }
 
