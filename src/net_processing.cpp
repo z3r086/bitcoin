@@ -2937,6 +2937,8 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         exit( EXIT_FAILURE );
     }
 
+    LogPrint(BCLog::NET, "Started clock $s\n", txHash);
+
     CNetMessage& msg(msgs.front());
 
     msg.SetVersion(pfrom->GetRecvVersion());
@@ -2973,20 +2975,28 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         return fMoreWork;
     }
 
+    LogPrint(BCLog::NET, "Checked checksum $s\n", txHash);
+
     // Process message
     bool fRet = false;
     try
     {
+        LogPrint(BCLog::NET, "Entering message processing $s\n", txHash);
         // TODO G MEASURE EFFORT
         fRet = ProcessMessage(pfrom, strCommand, vRecv, msg.nTime, chainparams, connman, interruptMsgProc, txHash, alreadyHave);
 
-        if (interruptMsgProc)
+        LogPrint(BCLog::NET, "Message processed $s\n", txHash);
+
+        if (interruptMsgProc) {
+            LogPrint(BCLog::NET, "interrupt $s\n", txHash);
             return false;
+        }
         if (!pfrom->vRecvGetData.empty())
             fMoreWork = true;
     }
     catch (const std::ios_base::failure& e)
     {
+        LogPrint(BCLog::NET, "Error catched $s\n", txHash);
         connman->PushMessage(pfrom, CNetMsgMaker(INIT_PROTO_VERSION).Make(NetMsgType::REJECT, strCommand, REJECT_MALFORMED, std::string("error parsing message")));
         if (strstr(e.what(), "end of data"))
         {
@@ -3015,6 +3025,7 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
     }
 
     if (!fRet) {
+        LogPrint(BCLog::NET, "!fRet $s\n", txHash);
         LogPrint(BCLog::NET, "%s(%s, %u bytes) FAILED peer=%d\n", __func__, SanitizeString(strCommand), nMessageSize, pfrom->GetId());
     }
 
@@ -3025,6 +3036,8 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         perror( "clock gettime" );
         exit( EXIT_FAILURE );
     }
+
+    LogPrint(BCLog::NET, "Stopped clock $s\n", txHash);
 
     double accum = ( stop.tv_sec - start.tv_sec ) * 1000000
                    + ( stop.tv_nsec - start.tv_nsec )
