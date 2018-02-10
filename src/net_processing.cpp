@@ -1872,9 +1872,10 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             LogPrint(BCLog::NET, "got inv: %s  %s peer=%d\n", inv.ToString(), fAlreadyHave ? "have" : "new", pfrom->GetId());
 
 
-            if (inv.type == MSG_TX) {
+            if (inv.type == MSG_TX)
                 inv.type |= nFetchFlags;
 
+            if (inv.type == MSG_TX || inv.type == MSG_WITNESS_TX) {
                 txHash = inv.hash.ToString();
                 alreadyHave = fAlreadyHave;
             }
@@ -3033,7 +3034,7 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         perror( "clock gettime" );
         exit( EXIT_FAILURE );
     }
-    
+
     double accum = ( stop.tv_sec - start.tv_sec ) * 1000000
                    + ( stop.tv_nsec - start.tv_nsec )
                      / 1000;
