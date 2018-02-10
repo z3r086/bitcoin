@@ -3589,7 +3589,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             }
         }
         if (!vInv.empty()) {
-//            LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s\n", pto->GetId(), hash.ToString());
+            LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s\n", pto->GetId(), vInv[0].hash.ToString());
             connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
         }
 
