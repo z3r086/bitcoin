@@ -3580,6 +3580,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                         }
                     }
                     if (vInv.size() == MAX_INV_SZ) {
+                        LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s\n", pto->GetId(), hash.ToString());
                         connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
                         vInv.clear();
                     }
@@ -3587,8 +3588,10 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                 }
             }
         }
-        if (!vInv.empty())
+        if (!vInv.empty()) {
+//            LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s\n", pto->GetId(), hash.ToString());
             connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
+        }
 
         // Detect whether we're stalling
         nNow = GetTimeMicros();
