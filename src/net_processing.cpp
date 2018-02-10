@@ -2981,11 +2981,8 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
     bool fRet = false;
     try
     {
-        LogPrint(BCLog::NET, "Entering message processing %s\n", txHash);
         // TODO G MEASURE EFFORT
         fRet = ProcessMessage(pfrom, strCommand, vRecv, msg.nTime, chainparams, connman, interruptMsgProc, txHash, alreadyHave);
-
-        LogPrint(BCLog::NET, "Message processed %s\n", txHash);
 
         if (interruptMsgProc) {
             LogPrint(BCLog::NET, "interrupt %s\n", txHash);
@@ -3036,9 +3033,7 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         perror( "clock gettime" );
         exit( EXIT_FAILURE );
     }
-
-    LogPrint(BCLog::NET, "Stopped clock %s\n", txHash);
-
+    
     double accum = ( stop.tv_sec - start.tv_sec ) * 1000000
                    + ( stop.tv_nsec - start.tv_nsec )
                      / 1000;
