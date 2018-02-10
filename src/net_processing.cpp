@@ -2938,8 +2938,6 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         exit( EXIT_FAILURE );
     }
 
-    LogPrint(BCLog::NET, "Started clock %s\n", txHash);
-
     CNetMessage& msg(msgs.front());
 
     msg.SetVersion(pfrom->GetRecvVersion());
@@ -2975,8 +2973,6 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
            HexStr(hdr.pchChecksum, hdr.pchChecksum+CMessageHeader::CHECKSUM_SIZE));
         return fMoreWork;
     }
-
-    LogPrint(BCLog::NET, "Checked checksum %s\n", txHash);
 
     // Process message
     bool fRet = false;
@@ -3462,6 +3458,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             for (const uint256& hash : pto->vInventoryBlockToSend) {
                 vInv.push_back(CInv(MSG_BLOCK, hash));
                 if (vInv.size() == MAX_INV_SZ) {
+                    LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s size=%d\n", pto->GetId(), vInv[0].hash.ToString(), vInv.size());
                     connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
                     vInv.clear();
                 }
@@ -3509,7 +3506,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                     vInv.push_back(inv);
                     if (vInv.size() == MAX_INV_SZ) {
                         // TODO G LOG
-                        LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s\n", pto->GetId(), hash.ToString());
+                        LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s size=%d\n", pto->GetId(), vInv[0].hash.ToString(), vInv.size());
                         connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
                         vInv.clear();
                     }
@@ -3585,7 +3582,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             }
         }
         if (!vInv.empty()) {
-            LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s\n", pto->GetId(), vInv[0].hash.ToString());
+            LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s size=%d\n", pto->GetId(), vInv[0].hash.ToString(), vInv.size());
             connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
         }
 
