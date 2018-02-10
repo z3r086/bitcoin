@@ -3458,7 +3458,10 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             for (const uint256& hash : pto->vInventoryBlockToSend) {
                 vInv.push_back(CInv(MSG_BLOCK, hash));
                 if (vInv.size() == MAX_INV_SZ) {
-                    LogPrint(BCLog::NET, "sending inv message peer=%d hash=%s size=%d\n", pto->GetId(), vInv[0].hash.ToString(), vInv.size());
+                    for (auto invItem: vInv) {
+                        LogPrint(BCLog::NET, "sending inv item peer=%d hash=%s\n", pto->GetId(),
+                                 invItem.hash.ToString());
+                    }
                     connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
                     vInv.clear();
                 }
