@@ -109,19 +109,19 @@ for key in sorted(tx_processing_times, key = lambda hash: len(tx_processing_time
 print("Totals: {totals}".format(totals=totals))
 
 
-total_times_between = [0] * 100
+total_times_between = [0] * 5000
 for time in times_between_dups_and_orig:
     total_times_between[int(time/1000)] += 1
 
 
 
-total_processing_times = [0] * 100
+total_processing_times = [0] * 5000
 for time in processing_times:
     total_processing_times[int(time/1000)] += 1
 
 
 
-print("Times btw messages distribution in ms: {times}".format(times=total_times_between))
+# print("Times btw messages distribution in ms: {times}".format(times=total_times_between))
 print("Average time between messages: {avg_time} microseconds".format(avg_time=sum(times_between_dups_and_orig)/len(times_between_dups_and_orig)))
 
 
@@ -129,7 +129,7 @@ print("Average time between messages: {avg_time} microseconds".format(avg_time=s
 # And bandwidth
 # And on mainnet
 print("Average processing time: {avg_time} microseconds".format(avg_time=sum(processing_times)/len(processing_times)))
-print("Times processing messages distribution in microseconds: {times}".format(times=total_processing_times))
+# print("Times processing messages distribution in microseconds: {times}".format(times=total_processing_times))
 
 print("Average processing time (fulltx): {avg_time} microseconds"
      .format(avg_time=sum(full_tx_processing_times)/len(full_tx_processing_times)))
