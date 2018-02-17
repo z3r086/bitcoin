@@ -1844,7 +1844,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
     else if (strCommand == NetMsgType::INV)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100000 * 5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000 * 1));
         std::vector<CInv> vInv;
         vRecv >> vInv;
         if (vInv.size() > MAX_INV_SZ)
