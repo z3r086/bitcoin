@@ -55,8 +55,7 @@ public:
    *                     to connect all of the nodes together
    *                     in the grid
    */
-  BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoNodes,
-                         enum Cryptocurrency cryptocurrency, int minConnectionsPerNode, int maxConnectionsPerNode, uint32_t systemId);
+  BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoNodes, uint32_t publicIPNodes, int minConnectionsPerNode, int maxConnectionsPerNode, uint32_t systemId);
 
   ~BitcoinTopologyHelper ();
 
@@ -140,8 +139,9 @@ private:
   int          m_maxConnectionsPerNode;         //!<  The maximum connections per node
   uint32_t     m_totalNoLinks;                  //!<  Total number of links
   uint32_t     m_systemId;
+  uint32_t     m_publicIPNodes;
 
-  enum Cryptocurrency                             m_cryptocurrency;
+
   std::map<uint32_t, std::vector<uint32_t>>       m_nodesConnections;        //!< key = nodeId
   std::map<uint32_t, std::vector<Ipv4Address>>    m_nodesConnectionsIps;     //!< key = nodeId
   std::vector<NodeContainer>                      m_nodes;                   //!< all the nodes in the network

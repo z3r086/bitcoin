@@ -59,7 +59,7 @@ main (int argc, char *argv[])
   int maxConnectionsPerNode = -1;
 
   uint64_t txToCreate = 1024;
-  int txGenerators;
+  int publicIPNodes;
 
   double stop;
 
@@ -84,7 +84,7 @@ main (int argc, char *argv[])
 
   cmd.AddValue ("txToCreatePerNode", "The number of transactions each of the chosen nodes should generate", txToCreate);
 
-  cmd.AddValue ("txGenerators", "How many nodes will generate transactions", txGenerators);
+  cmd.AddValue ("publicIPNodes", "How many nodes has public IP", publicIPNodes);
 
   cmd.Parse(argc, argv);
 
@@ -101,8 +101,7 @@ main (int argc, char *argv[])
 
   LogComponentEnable("BitcoinNode", LOG_LEVEL_INFO);
 
-  BitcoinTopologyHelper bitcoinTopologyHelper (systemCount, totalNoNodes,
-                                               cryptocurrency, minConnectionsPerNode,
+  BitcoinTopologyHelper bitcoinTopologyHelper (systemCount, totalNoNodes, publicIPNodes, minConnectionsPerNode,
                                                maxConnectionsPerNode, systemId);
 
 
@@ -144,7 +143,7 @@ main (int argc, char *argv[])
       bitcoinNodeHelper.SetNodeInternetSpeeds (nodesInternetSpeeds[node.first]);
 
       // Setting tx to create limit
-      if (nodesInSystemId0 % int(totalNoNodes / txGenerators) == 0) {
+      if (nodesInSystemId0 % int(totalNoNodes / publicIPNodes) == 0) {
         bitcoinNodeHelper.SetProperties(txToCreate);
       } else {
         bitcoinNodeHelper.SetProperties(0);
@@ -178,124 +177,6 @@ main (int argc, char *argv[])
   Simulator::Run ();
   Simulator::Destroy ();
 
-// #ifdef MPI_TEST
-//
-//   int            blocklen[38] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-//                                  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-//                                  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
-//   MPI_Aint       disp[38];
-//   MPI_Datatype   dtypes[38] = {MPI_INT, MPI_DOUBLE, MPI_DOUBLE, MPI_DOUBLE, MPI_INT, MPI_INT, MPI_INT, MPI_INT, MPI_DOUBLE, MPI_DOUBLE, MPI_DOUBLE, MPI_INT,
-//                                MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG,
-//                                MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_LONG, MPI_INT, MPI_INT, MPI_INT, MPI_LONG, MPI_LONG, MPI_INT};
-//   MPI_Datatype   mpi_nodeStatisticsType;
-//
-//   disp[0] = offsetof(nodeStatistics, nodeId);
-//   disp[1] = offsetof(nodeStatistics, meanBlockReceiveTime);
-//   disp[2] = offsetof(nodeStatistics, meanBlockPropagationTime);
-//   disp[3] = offsetof(nodeStatistics, meanBlockSize);
-//   disp[4] = offsetof(nodeStatistics, totalBlocks);
-//   disp[5] = offsetof(nodeStatistics, staleBlocks);
-//   disp[10] = offsetof(nodeStatistics, hashRate);
-//   disp[11] = offsetof(nodeStatistics, attackSuccess);
-//   disp[12] = offsetof(nodeStatistics, invReceivedBytes);
-//   disp[13] = offsetof(nodeStatistics, invSentBytes);
-//   disp[14] = offsetof(nodeStatistics, getHeadersReceivedBytes);
-//   disp[15] = offsetof(nodeStatistics, getHeadersSentBytes);
-//   disp[16] = offsetof(nodeStatistics, headersReceivedBytes);
-//   disp[17] = offsetof(nodeStatistics, headersSentBytes);
-//   disp[18] = offsetof(nodeStatistics, getDataReceivedBytes);
-//   disp[19] = offsetof(nodeStatistics, getDataSentBytes);
-//   disp[20] = offsetof(nodeStatistics, blockReceivedBytes);
-//   disp[21] = offsetof(nodeStatistics, blockSentBytes);
-//   disp[22] = offsetof(nodeStatistics, extInvReceivedBytes);
-//   disp[23] = offsetof(nodeStatistics, extInvSentBytes);
-//   disp[24] = offsetof(nodeStatistics, extGetHeadersReceivedBytes);
-//   disp[25] = offsetof(nodeStatistics, extGetHeadersSentBytes);
-//   disp[26] = offsetof(nodeStatistics, extHeadersReceivedBytes);
-//   disp[27] = offsetof(nodeStatistics, extHeadersSentBytes);
-//   disp[28] = offsetof(nodeStatistics, extGetDataReceivedBytes);
-//   disp[29] = offsetof(nodeStatistics, extGetDataSentBytes);
-//   disp[30] = offsetof(nodeStatistics, chunkReceivedBytes);
-//   disp[31] = offsetof(nodeStatistics, chunkSentBytes);
-//   disp[32] = offsetof(nodeStatistics, longestFork);
-//   disp[33] = offsetof(nodeStatistics, blocksInForks);
-//   disp[34] = offsetof(nodeStatistics, connections);
-//   disp[35] = offsetof(nodeStatistics, blockTimeouts);
-//   disp[36] = offsetof(nodeStatistics, chunkTimeouts);
-//   disp[37] = offsetof(nodeStatistics, minedBlocksInMainChain);
-//
-//   MPI_Type_create_struct (38, blocklen, disp, dtypes, &mpi_nodeStatisticsType);
-//   MPI_Type_commit (&mpi_nodeStatisticsType);
-//
-//   if (systemId != 0 && systemCount > 1)
-//   {
-//     /**
-//      * Sent all the systemId stats to systemId == 0
-// 	 */
-// 	/* std::cout << "SystemId = " << systemId << "\n"; */
-//
-//     for(int i = 0; i < totalNoNodes; i++)
-//     {
-//       Ptr<Node> targetNode = bitcoinTopologyHelper.GetNode (i);
-//
-// 	  if (systemId == targetNode->GetSystemId())
-// 	  {
-//         MPI_Send(&stats[i], 1, mpi_nodeStatisticsType, 0, 8888, MPI_COMM_WORLD);
-// 	  }
-//     }
-//   }
-//   else if (systemId == 0 && systemCount > 1)
-//   {
-//     int count = nodesInSystemId0;
-//
-// 	while (count < totalNoNodes)
-// 	{
-// 	  MPI_Status status;
-//       nodeStatistics recv;
-//
-// 	  /* std::cout << "SystemId = " << systemId << "\n"; */
-// 	  MPI_Recv(&recv, 1, mpi_nodeStatisticsType, MPI_ANY_SOURCE, 8888, MPI_COMM_WORLD, &status);
-//
-// /* 	  std::cout << "SystemId 0 received: statistics for node " << recv.nodeId
-//                 <<  " from systemId = " << status.MPI_SOURCE << "\n"; */
-//       stats[recv.nodeId].nodeId = recv.nodeId;
-//       stats[recv.nodeId].meanBlockReceiveTime = recv.meanBlockReceiveTime;
-//       stats[recv.nodeId].meanBlockPropagationTime = recv.meanBlockPropagationTime;
-//       stats[recv.nodeId].meanBlockSize = recv.meanBlockSize;
-//       stats[recv.nodeId].totalBlocks = recv.totalBlocks;
-//       stats[recv.nodeId].staleBlocks = recv.staleBlocks;
-//       stats[recv.nodeId].hashRate = recv.hashRate;
-//       stats[recv.nodeId].invReceivedBytes = recv.invReceivedBytes;
-//       stats[recv.nodeId].invSentBytes = recv.invSentBytes;
-//       stats[recv.nodeId].getHeadersReceivedBytes = recv.getHeadersReceivedBytes;
-//       stats[recv.nodeId].getHeadersSentBytes = recv.getHeadersSentBytes;
-//       stats[recv.nodeId].headersReceivedBytes = recv.headersReceivedBytes;
-//       stats[recv.nodeId].headersSentBytes = recv.headersSentBytes;
-//       stats[recv.nodeId].getDataReceivedBytes = recv.getDataReceivedBytes;
-//       stats[recv.nodeId].getDataSentBytes = recv.getDataSentBytes;
-//       stats[recv.nodeId].blockReceivedBytes = recv.blockReceivedBytes;
-//       stats[recv.nodeId].blockSentBytes = recv.blockSentBytes;
-//       stats[recv.nodeId].extInvReceivedBytes = recv.extInvReceivedBytes;
-//       stats[recv.nodeId].extInvSentBytes = recv.extInvSentBytes;
-//       stats[recv.nodeId].extGetHeadersReceivedBytes = recv.extGetHeadersReceivedBytes;
-//       stats[recv.nodeId].extGetHeadersSentBytes = recv.extGetHeadersSentBytes;
-//       stats[recv.nodeId].extHeadersReceivedBytes = recv.extHeadersReceivedBytes;
-//       stats[recv.nodeId].extHeadersSentBytes = recv.extHeadersSentBytes;
-//       stats[recv.nodeId].extGetDataReceivedBytes = recv.extGetDataReceivedBytes;
-//       stats[recv.nodeId].extGetDataSentBytes = recv.extGetDataSentBytes;
-//       stats[recv.nodeId].chunkReceivedBytes = recv.chunkReceivedBytes;
-//       stats[recv.nodeId].chunkSentBytes = recv.chunkSentBytes;
-//       stats[recv.nodeId].longestFork = recv.longestFork;
-//       stats[recv.nodeId].blocksInForks = recv.blocksInForks;
-//       stats[recv.nodeId].connections = recv.connections;
-//       stats[recv.nodeId].blockTimeouts = recv.blockTimeouts;
-//       stats[recv.nodeId].chunkTimeouts = recv.chunkTimeouts;
-//       stats[recv.nodeId].minedBlocksInMainChain = recv.minedBlocksInMainChain;
-// 	  count++;
-//     }
-//   }
-// #endif
-//
   if (systemId == 0)
   {
     tFinish=get_wall_time();
@@ -312,15 +193,6 @@ main (int argc, char *argv[])
               << "\n";
 
   }
-
-// #ifdef MPI_TEST
-//
-//   // Exit the MPI execution environment
-//   MpiInterface::Disable ();
-// #endif
-//
-
-
 
   delete[] stats;
   std::cout << "Fin \n";
