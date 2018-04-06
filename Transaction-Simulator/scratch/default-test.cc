@@ -34,7 +34,7 @@ using namespace ns3;
 
 double get_wall_time();
 int GetNodeIdByIpv4 (Ipv4InterfaceContainer container, Ipv4Address addr);
-void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes);
+void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPNodes);
 void PrintTotalStats (nodeStatistics *stats, int totalNodes, double start, double finish, double averageBlockGenIntervalMinutes, bool relayNetwork);
 void PrintBitcoinRegionStats (uint32_t *bitcoinNodesRegions, uint32_t totalNodes);
 
@@ -143,10 +143,10 @@ main (int argc, char *argv[])
       bitcoinNodeHelper.SetNodeInternetSpeeds (nodesInternetSpeeds[node.first]);
 
       // Setting tx to create limit
-      if (nodesInSystemId0 % int(totalNoNodes / publicIPNodes) == 0) {
-        bitcoinNodeHelper.SetProperties(txToCreate);
-      } else {
+      if (nodesInSystemId0 < publicIPNodes) {
         bitcoinNodeHelper.SetProperties(0);
+      } else {
+        bitcoinNodeHelper.SetProperties(txToCreate);
       }
 
   	  bitcoinNodeHelper.SetNodeStats (&stats[node.first]);
@@ -181,7 +181,7 @@ main (int argc, char *argv[])
   {
     tFinish=get_wall_time();
 
-    PrintStatsForEachNode(stats, totalNoNodes);
+    PrintStatsForEachNode(stats, totalNoNodes, publicIPNodes);
     // PrintTotalStats(stats, totalNoNodes, tStartSimulation, tFinish, averageBlockGenIntervalMinutes, relayNetwork);
 
 
@@ -195,7 +195,6 @@ main (int argc, char *argv[])
   }
 
   delete[] stats;
-  std::cout << "Fin \n";
 
   return 0;
 //
@@ -225,10 +224,12 @@ int GetNodeIdByIpv4 (Ipv4InterfaceContainer container, Ipv4Address addr)
   return -1; //if not found
 }
 
-void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes)
+void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPNodes)
 {
-  float totalUsefulInvSentRate = 0;
+  float totalUsefulInvSentRatePublicIPNode = 0;
+  float totalUsefulInvSentRatePrivateIPNode = 0;
   float totalUsefulInvReceivedRate = 0;
+  float totaluselessInvSentMegabytesPublicIPNode = 0;
 
   for (int it = 0; it < totalNodes; it++ )
   {
@@ -240,20 +241,40 @@ void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes)
     std::cout << "GetData sent = " << stats[it].getDataSentMessages << "\n";
     std::cout << "GetData received = " << stats[it].getDataReceivedMessages << "\n";
 
+    std::cout << "GetData sent = " << stats[it].getDataSentMessages << "\n";
+    std::cout << "GetData received = " << stats[it].getDataReceivedMessages << "\n";
+
+
+
     float usefulInvSentRate = float(stats[it].getDataReceivedMessages) / stats[it].invSentMessages;
     float usefulInvReceivedRate = float(stats[it].getDataSentMessages) / stats[it].invReceivedMessages;
+    float invSentMegabytes = float(stats[it].invSentBytes) / 1024 / 1024;
+
+    std::cout << "Inv sent megabytes = " << invSentMegabytes << "\n";
+    std::cout << "Useless inv sent megabytes = " << (1.0-usefulInvSentRate) * invSentMegabytes << "\n";
 
     std::cout << "Useful inv sent rate = " << usefulInvSentRate << "\n";
     std::cout << "Useful inv received rate = " << usefulInvReceivedRate << "\n";
 
-    totalUsefulInvSentRate += usefulInvSentRate;
+    if (it < publicIPNodes) {
+      totalUsefulInvSentRatePublicIPNode += usefulInvSentRate;
+      totaluselessInvSentMegabytesPublicIPNode += (1.0-usefulInvSentRate) * invSentMegabytes;
+    }
+
+    if (it >= publicIPNodes)
+      totalUsefulInvSentRatePrivateIPNode += usefulInvSentRate;
+
+
     totalUsefulInvReceivedRate += usefulInvReceivedRate;
 
   }
 
-  std::cout << "Average useful inv sent rate = " << totalUsefulInvSentRate / totalNodes << "\n";
-  std::cout << "Average useful inv received rate = " << totalUsefulInvReceivedRate / totalNodes << "\n";
+  std::cout << "Average useful inv sent rate (public IP nodes) =" << totalUsefulInvSentRatePublicIPNode / publicIPNodes << "\n";
+  std::cout << "Average useful inv sent rate (private IP nodes) = " << totalUsefulInvSentRatePrivateIPNode / (totalNodes - publicIPNodes) << "\n";
 
+  std::cout << "Average useful inv received rate (all) = " << totalUsefulInvReceivedRate / totalNodes << "\n";
+
+  std::cout << "Average useless inv megabytes sent (public IP) = " << totaluselessInvSentMegabytesPublicIPNode / publicIPNodes << "\n";
 
 }
 

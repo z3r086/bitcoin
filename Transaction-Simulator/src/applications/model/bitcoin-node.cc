@@ -125,7 +125,6 @@ void
 BitcoinNode::SetNodeStats (nodeStatistics *nodeStats)
 {
   NS_LOG_FUNCTION (this);
-  std::cout << nodeStats;
   m_nodeStats = nodeStats;
 }
 
@@ -310,25 +309,11 @@ BitcoinNode::EmitTransaction (void)
   value = INV;
   inv.AddMember("message", value, inv.GetAllocator());
 
-  // TODO txHash
   value.SetString(transactionHash.c_str(), transactionHash.size(), inv.GetAllocator());
   array.PushBack(value, inv.GetAllocator());
 
   inv.AddMember("inv", array, inv.GetAllocator());
 
-
-  // TODO some statistics
-  // m_meanBlockReceiveTime = (m_blockchain.GetTotalBlocks() - 1)/static_cast<double>(m_blockchain.GetTotalBlocks())*m_meanBlockReceiveTime
-  //                        + (currentTime - m_previousBlockReceiveTime)/(m_blockchain.GetTotalBlocks());
-  // m_previousBlockReceiveTime = currentTime;
-  //
-  // m_meanBlockPropagationTime = (m_blockchain.GetTotalBlocks() - 1)/static_cast<double>(m_blockchain.GetTotalBlocks())*m_meanBlockPropagationTime;
-  //
-  // m_meanBlockSize = (m_blockchain.GetTotalBlocks() - 1)/static_cast<double>(m_blockchain.GetTotalBlocks())*m_meanBlockSize
-  //                 + (m_nextBlockSize)/static_cast<double>(m_blockchain.GetTotalBlocks());
-
-  // TODO Add transaction to local mem instead
-  // m_blockchain.AddBlock(newBlock);
 
   // Stringify the DOM
   rapidjson::StringBuffer invInfo;
@@ -336,7 +321,6 @@ BitcoinNode::EmitTransaction (void)
   inv.Accept(invWriter);
 
 
-  // TODO Tx info
   rapidjson::StringBuffer txInfo;
   rapidjson::Writer<rapidjson::StringBuffer> txWriter(txInfo);
   // block.Accept(blockWriter);
@@ -347,7 +331,6 @@ BitcoinNode::EmitTransaction (void)
   {
 
 
-    // TODO remove useless stuff
     const uint8_t delimiter[] = "#";
     m_peersSockets[*i]->Send (reinterpret_cast<const uint8_t*>(invInfo.GetString()), invInfo.GetSize(), 0);
     m_peersSockets[*i]->Send (delimiter, 1, 0);
@@ -356,8 +339,6 @@ BitcoinNode::EmitTransaction (void)
                  << "s node " << GetNode ()->GetId ()
                  << " sent a packet " << invInfo.GetString()
 	         << " to " << *i);
-
-        // std::cout << "node " << GetNode()->GetId() << " sent a packet " << transactionHash << " to " << *i << "\n";
 
         m_nodeStats->invSentMessages += 1;
 
@@ -447,19 +428,11 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
           {
             case INV:
             {
-              // std::cout << "Node: " <<  GetNode()->GetId() << ", handling INV: " << parsedPacket << "\n";
-
-              //NS_LOG_INFO ("INV");
               int j;
               m_nodeStats->invReceivedMessages += 1;
               std::vector<std::string>            requestTxs;
-              // std::vector<std::string>::iterator  block_it;
-              //
-              // m_nodeStats->invReceivedBytes += m_bitcoinMessageHeader + m_countBytes + d["inv"].Size()*m_inventorySizeBytes;
-              //
               for (j=0; j<d["inv"].Size(); j++)
               {
-                std::string   invDelimiter = "/";
                 std::string   parsedInv = d["inv"][j].GetString();
                 if(std::find(knownTxHashes.begin(), knownTxHashes.end(), parsedInv) != knownTxHashes.end()) {
                   // std::cout << "Node: " <<  GetNode()->GetId() << ", got dup: " << parsedInv << " From: " <<  InetSocketAddress::ConvertFrom(from).GetIpv4() << "\n";
@@ -469,7 +442,6 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
                 }
                 knownTxHashes.push_back(parsedInv);
 
-                AdvertiseNewTransactionInv(from, parsedInv);
                 requestTxs.push_back(parsedInv);
               }
 
@@ -495,104 +467,20 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
             {
               NS_LOG_INFO ("GET_DATA");
               m_nodeStats->getDataReceivedMessages += 1;
-              int j;
-              // int totalBlockMessageSize = 0;
-              //
-              // m_nodeStats->getDataReceivedBytes += m_bitcoinMessageHeader + m_countBytes + d["blocks"].Size()*m_inventorySizeBytes;
-              //
-              // for (j=0; j<d["blocks"].Size(); j++)
-              // {
-              //   std::string    invDelimiter = "/";
-              //   std::string    parsedInv = d["blocks"][j].GetString();
-              //   size_t         invPos = parsedInv.find(invDelimiter);
-              //
-              //   int height = atoi(parsedInv.substr(0, invPos).c_str());
-              //   int minerId = atoi(parsedInv.substr(invPos+1, parsedInv.size()).c_str());
-              //
-              //   if (m_blockchain.HasBlock(height, minerId))
-              //   {
-              //     NS_LOG_INFO("GET_DATA: Bitcoin node " << GetNode ()->GetId ()
-              //                 << " has already received the block with height = "
-              //                 << height << " and minerId = " << minerId);
-              //     Block newBlock (m_blockchain.ReturnBlock (height, minerId));
-              //     requestBlocks.push_back(newBlock);
-              //   }
-              //   else
-              //   {
-              //     NS_LOG_INFO("GET_DATA: Bitcoin node " << GetNode ()->GetId ()
-              //     << " does not have the block with height = "
-              //     << height << " and minerId = " << minerId);
-              //   }
-              // }
-              //
-              // if (!requestBlocks.empty())
-              // {
-              //   rapidjson::Value value;
-              //   rapidjson::Value array(rapidjson::kArrayType);
-              //
-              //
-              //   d.RemoveMember("blocks");
-              //
-              //   for (block_it = requestBlocks.begin(); block_it < requestBlocks.end(); block_it++)
-              //   {
-              //     rapidjson::Value blockInfo(rapidjson::kObjectType);
-              //     NS_LOG_INFO ("In requestBlocks " << *block_it);
-              //
-              //     value = block_it->GetBlockHeight ();
-              //     blockInfo.AddMember("height", value, d.GetAllocator ());
-              //
-              //     value = block_it->GetMinerId ();
-              //     blockInfo.AddMember("minerId", value, d.GetAllocator ());
-              //
-              //     value = block_it->GetParentBlockMinerId ();
-              //     blockInfo.AddMember("parentBlockMinerId", value, d.GetAllocator ());
-              //
-              //     value = block_it->GetBlockSizeBytes ();
-              //     totalBlockMessageSize += value.GetInt();
-              //     blockInfo.AddMember("size", value, d.GetAllocator ());
-              //
-              //     value = block_it->GetTimeCreated ();
-              //     blockInfo.AddMember("timeCreated", value, d.GetAllocator ());
-              //
-              //     value = block_it->GetTimeReceived ();
-              //     blockInfo.AddMember("timeReceived", value, d.GetAllocator ());
-              //
-              //     array.PushBack(blockInfo, d.GetAllocator());
-              //   }
-              //
-              //   d.AddMember("blocks", array, d.GetAllocator());
-              //
-              //   double sendTime = totalBlockMessageSize / m_uploadSpeed;
-	            // double eventTime;
-              //
-              //   if (m_sendBlockTimes.size() == 0 || Simulator::Now ().GetSeconds() >  m_sendBlockTimes.back())
-              //   {
-              //     eventTime = 0;
-              //   }
-              //   else
-              //   {
-              //     //std::cout << "m_sendBlockTimes.back() = m_sendBlockTimes.back() = " << m_sendBlockTimes.back() << std::endl;
-              //     eventTime = m_sendBlockTimes.back() - Simulator::Now ().GetSeconds();
-              //   }
-              //   m_sendBlockTimes.push_back(Simulator::Now ().GetSeconds() + eventTime + sendTime);
-              //
-              //   //std::cout << sendTime << " " << eventTime << " " << m_sendBlockTimes.size() << std::endl;
-              //   NS_LOG_INFO("Node " << GetNode()->GetId() << " will start sending the block to " << InetSocketAddress::ConvertFrom(from).GetIpv4 ()
-              //               << " at " << Simulator::Now ().GetSeconds() + eventTime << "\n");
-              //
-              //
-              //   // Stringify the DOM
-              //   rapidjson::StringBuffer packetInfo;
-              //   rapidjson::Writer<rapidjson::StringBuffer> writer(packetInfo);
-              //   d.Accept(writer);
-              //   std::string packet = packetInfo.GetString();
-              //   NS_LOG_INFO ("DEBUG: " << packetInfo.GetString());
-              //
-              //   Simulator::Schedule (Seconds(eventTime), &BitcoinNode::SendBlock, this, packet, from);
-              //   Simulator::Schedule (Seconds(eventTime + sendTime), &BitcoinNode::RemoveSendTime, this);
-              //
-              // }
+              SendMessage(GET_DATA, TX, d, from);
               break;
+            }
+            case TX:
+            {
+              rapidjson::StringBuffer buffer;
+              rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+              d.Accept(writer);
+
+              for (int j=0; j<d["transactions"].Size(); j++)
+              {
+                std::string   parsedInv = d["transactions"][j].GetString();
+                AdvertiseNewTransactionInv(from, parsedInv);
+              }
             }
             default:
               NS_LOG_INFO ("Default");
@@ -661,6 +549,7 @@ BitcoinNode::AdvertiseNewTransactionInv (Address from, const std::string transac
       m_peersSockets[*i]->Send (reinterpret_cast<const uint8_t*>(invInfo.GetString()), invInfo.GetSize(), 0);
       m_peersSockets[*i]->Send (delimiter, 1, 0);
       m_nodeStats->invSentMessages += 1;
+      m_nodeStats->invSentBytes += m_bitcoinMessageHeader + m_countBytes + inv["inv"].Size()*m_inventorySizeBytes;
     }
   }
 }

@@ -76,34 +76,38 @@ BitcoinTopologyHelper::BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoN
 
   for(int i = 0; i < m_totalNoNodes; i++)
   {
-	  m_minConnections[i] = m_maxConnectionsPerNode;
-	  m_maxConnections[i] = m_maxConnectionsPerNode;
+	  m_minConnections[i] = m_minConnectionsPerNode;
+    if (i >= publicIPNodes)
+      m_maxConnections[i] = m_minConnectionsPerNode;
+    else
+      m_maxConnections[i] = m_maxConnectionsPerNode;
   }
 
-  //Then the rest of nodes
   for(int i = 0; i < m_totalNoNodes; i++)
   {
 	int count = 0;
 
     while (m_nodesConnections[i].size() < m_minConnections[i] && count < 10*m_minConnections[i])
     {
-      uint32_t index = rand() % nodes.size();
+      // Choose from publicIP nodes only
+      uint32_t index = rand() % publicIPNodes;
+      // uint32_t index = rand() % nodes.size();
 	    uint32_t candidatePeer = nodes[index];
 
       if (candidatePeer == i)
       {
-   		  if (m_systemId == 0)
-            std::cout << "Node " << i << " does not need a connection with itself" << "\n";
+   		  // if (m_systemId == 0)
+        //     std::cout << "Node " << i << " does not need a connection with itself" << "\n";
       }
       else if (std::find(m_nodesConnections[i].begin(), m_nodesConnections[i].end(), candidatePeer) != m_nodesConnections[i].end())
       {
-   		  if (m_systemId == 0)
-            std::cout << "Node " << i << " has already a connection to Node " << nodes[index] << "\n";
+   		  // if (m_systemId == 0)
+        //     std::cout << "Node " << i << " has already a connection to Node " << nodes[index] << "\n";
       }
       else if (m_nodesConnections[candidatePeer].size() >= m_maxConnections[candidatePeer])
       {
- 		     if (m_systemId == 0)
-            std::cout << "Node " << nodes[index] << " has already " << m_maxConnections[candidatePeer] << " connections" << "\n";
+ 		     // if (m_systemId == 0)
+         //    std::cout << "Node " << nodes[index] << " has already " << m_maxConnections[candidatePeer] << " connections" << "\n";
       }
       else
       {
@@ -243,7 +247,7 @@ BitcoinTopologyHelper::BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoN
       if ( *it <= node.first)	//Do not recreate links
         continue;
 
-      std::cout << "Node: " << node.first <<  ", connects to: " << *it << "\n";
+      // std::cout << "Node: " << node.first <<  ", connects to: " << *it << "\n";
 
         NetDeviceContainer newDevices;
 

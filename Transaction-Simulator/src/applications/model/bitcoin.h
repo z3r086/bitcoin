@@ -20,7 +20,8 @@ namespace ns3 {
 enum Messages
 {
   INV,              //0
-  GET_DATA         //1
+  GET_DATA,         //1
+  TX
 };
 
 enum ProtocolType
