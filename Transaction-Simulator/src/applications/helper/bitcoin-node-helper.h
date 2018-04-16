@@ -37,7 +37,7 @@ public:
    */
   BitcoinNodeHelper (std::string protocol, Address address, std::vector<Ipv4Address> &peers,
                      std::map<Ipv4Address, double> &peersDownloadSpeeds, std::map<Ipv4Address, double> &peersUploadSpeeds,
-                     nodeInternetSpeeds &internetSpeeds, nodeStatistics *stats);
+                     nodeInternetSpeeds &internetSpeeds, nodeStatistics *stats, ProtocolType protocolType);
 
   /**
    * Called by subclasses to set a different factory TypeId
@@ -59,7 +59,7 @@ public:
    */
    void commonConstructor(std::string protocol, Address address, std::vector<Ipv4Address> &peers,
                           std::map<Ipv4Address, double> &peersDownloadSpeeds, std::map<Ipv4Address, double> &peersUploadSpeeds,
-                          nodeInternetSpeeds &internetSpeeds, nodeStatistics *stats);
+                          nodeInternetSpeeds &internetSpeeds, nodeStatistics *stats, ProtocolType protocolType);
 
   /**
    * Helper function used to set the underlying application attributes.

@@ -111,8 +111,6 @@ BitcoinTopologyHelper::BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoN
       }
       else
       {
-
-
         m_nodesConnections[i].push_back(candidatePeer);
         m_nodesConnections[candidatePeer].push_back(i);
 
@@ -157,47 +155,13 @@ BitcoinTopologyHelper::BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoN
   //Print the nodes' connections distribution
   if (m_systemId == 0)
   {
-    int *intervals =  new int[connectionsDistributionIntervals.size() + 1];
 	int *stats = new int[connectionsDistributionIntervals.size()];
 	double averageNoConnectionsPerNode = 0;
 
-	for(int i = 0; i < connectionsDistributionIntervals.size(); i++)
-      intervals[i] = connectionsDistributionIntervals[i] + i;
 
-	for(int i = 0; i < connectionsDistributionIntervals.size(); i++)
-      stats[i] = 0;
-
-    std::cout << "\nThe nodes connections stats are:\n";
-    for(auto &node : m_nodesConnections)
-    {
-  	  //std::cout << "\nNode " << node.first << ": " << m_minConnections[node.first] << ", " << m_maxConnections[node.first] << ", " << node.second.size();
-      bool placed = false;
-      averageNoConnectionsPerNode += node.second.size();
-
-	  for (int i = 1; i < connectionsDistributionIntervals.size(); i++)
-      {
-        if (node.second.size() <= intervals[i])
-        {
-          stats[i-1]++;
-          placed = true;
-          break;
-		}
-      }
-	  if (!placed)
-      {
-        //std::cout << "Node " << node.first << " has " << node.second.size() << " connections\n";
-        stats[connectionsDistributionIntervals.size() - 1]++;
-      }
-    }
 
     std::cout << "Average Number of Connections Per Node = " << averageNoConnectionsPerNode / (m_totalNoNodes);
 
-    for (uint32_t i = 0; i < connectionsDistributionIntervals.size(); i++)
-    {
-      std::cout << intervals[i] << "-" << intervals[i+1] << ": " << stats[i] << "(" << stats[i] * 100.0 / m_totalNoNodes << "%)\n";
-    }
-
-    delete[] intervals;
 	delete[] stats;
   }
 

@@ -55,7 +55,8 @@ public:
    *                     to connect all of the nodes together
    *                     in the grid
    */
-  BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoNodes, uint32_t publicIPNodes, int minConnectionsPerNode, int maxConnectionsPerNode, uint32_t systemId);
+  BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoNodes, uint32_t publicIPNodes,
+    int minConnectionsPerNode, int maxConnectionsPerNode, uint32_t systemId);
 
   ~BitcoinTopologyHelper ();
 

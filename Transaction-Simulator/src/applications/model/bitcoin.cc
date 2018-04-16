@@ -14,12 +14,6 @@
 namespace ns3 {
 
 
-/**
- *
- * Class Block functions
- *
- */
-
 Transaction::Transaction(double timeCreated, double timeReceived, Ipv4Address receivedFromIpv4)
 {
   m_timeCreated = timeCreated;
@@ -112,7 +106,7 @@ const char* getProtocolType(enum ProtocolType m)
   switch (m)
   {
     case STANDARD_PROTOCOL: return "STANDARD_PROTOCOL";
-    case NEW_PROTOCOL: return "NEW_PROTOCOL";
+    case FILTERS_ON_LINKS: return "FILTERS_ON_LINKS";
   }
 }
 

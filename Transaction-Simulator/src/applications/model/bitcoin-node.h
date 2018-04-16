@@ -119,6 +119,10 @@ protected:
    */
   void HandlePeerError (Ptr<Socket> socket);
 
+
+
+  void AnnounceFilters(void);
+
   void ScheduleNextTransactionEvent(void);
   void EmitTransaction(void);
 
@@ -172,8 +176,11 @@ protected:
   bool            m_spv;                              //!< Simplified Payment Verification. Used only in conjuction with blockTorrent
   uint m_fixedTxTimeGeneration;
 
+  std::map<Address, uint32_t> filters;
+
   uint lastTxId;
   std::vector<std::string> knownTxHashes;
+
 
   uint32_t sentOriginalInvs;
   uint32_t retransmittedInvs;

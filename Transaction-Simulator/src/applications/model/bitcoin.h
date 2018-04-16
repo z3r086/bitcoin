@@ -21,13 +21,14 @@ enum Messages
 {
   INV,              //0
   GET_DATA,         //1
-  TX
+  TX,
+  FILTER
 };
 
 enum ProtocolType
 {
   STANDARD_PROTOCOL,           //DEFAULT
-  NEW_PROTOCOL
+  FILTERS_ON_LINKS
 };
 
 
@@ -72,6 +73,8 @@ typedef struct {
   int64_t     getDataSentMessages;
   int64_t txCreated;
   int      connections;
+
+  std::map<std::string, double> txReceivedTimes;
 } nodeStatistics;
 
 

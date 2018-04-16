@@ -58,6 +58,9 @@ main (int argc, char *argv[])
   int minConnectionsPerNode = -1;
   int maxConnectionsPerNode = -1;
 
+  uint32_t protocol;
+
+
   uint64_t txToCreate = 1024;
   int publicIPNodes;
 
@@ -85,6 +88,9 @@ main (int argc, char *argv[])
   cmd.AddValue ("txToCreatePerNode", "The number of transactions each of the chosen nodes should generate", txToCreate);
 
   cmd.AddValue ("publicIPNodes", "How many nodes has public IP", publicIPNodes);
+
+  cmd.AddValue ("protocolType", "Used protocol: 0 — Default, 1 — Filters on links", protocol);
+
 
   cmd.Parse(argc, argv);
 
@@ -128,7 +134,7 @@ main (int argc, char *argv[])
 
   //Install simple nodes
   BitcoinNodeHelper bitcoinNodeHelper ("ns3::TcpSocketFactory", InetSocketAddress (Ipv4Address::GetAny (), bitcoinPort),
-                                        nodesConnections[0], peersDownloadSpeeds[0],  peersUploadSpeeds[0], nodesInternetSpeeds[0], stats);
+                                        nodesConnections[0], peersDownloadSpeeds[0],  peersUploadSpeeds[0], nodesInternetSpeeds[0], stats, ProtocolType(protocol));
   ApplicationContainer bitcoinNodes;
 
   for(auto &node : nodesConnections)
@@ -152,6 +158,8 @@ main (int argc, char *argv[])
   	  bitcoinNodeHelper.SetNodeStats (&stats[node.first]);
 
       bitcoinNodes.Add(bitcoinNodeHelper.Install (targetNode));
+
+
       // std::cout << "SystemId " << systemId << ": Node " << node.first << " with systemId = " << targetNode->GetSystemId()
   	  //         << " was installed in node " << targetNode->GetId () <<  std::endl;
 
@@ -190,7 +198,7 @@ main (int argc, char *argv[])
               << " faster than realtime.\n" << "Setup time = " << tStartSimulation - tStart << "s\n"
               <<"It consisted of " << totalNoNodes << " nodes ( with minConnectionsPerNode = "
               << minConnectionsPerNode << " and maxConnectionsPerNode = " << maxConnectionsPerNode
-              << "\n";
+              << "\n" << "Protocol Type: " << protocol << "\n";
 
   }
 
@@ -231,6 +239,8 @@ void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPN
   float totalUsefulInvReceivedRate = 0;
   float totaluselessInvSentMegabytesPublicIPNode = 0;
 
+  std::map<std::string, std::vector<double>> allTxRelayTimes;
+
   for (int it = 0; it < totalNodes; it++ )
   {
     std::cout << "\nNode " << stats[it].nodeId << " statistics:\n";
@@ -250,11 +260,11 @@ void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPN
     float usefulInvReceivedRate = float(stats[it].getDataSentMessages) / stats[it].invReceivedMessages;
     float invSentMegabytes = float(stats[it].invSentBytes) / 1024 / 1024;
 
-    std::cout << "Inv sent megabytes = " << invSentMegabytes << "\n";
-    std::cout << "Useless inv sent megabytes = " << (1.0-usefulInvSentRate) * invSentMegabytes << "\n";
+    // std::cout << "Inv sent megabytes = " << invSentMegabytes << "\n";
+    // std::cout << "Useless inv sent megabytes = " << (1.0-usefulInvSentRate) * invSentMegabytes << "\n";
 
-    std::cout << "Useful inv sent rate = " << usefulInvSentRate << "\n";
-    std::cout << "Useful inv received rate = " << usefulInvReceivedRate << "\n";
+    // std::cout << "Useful inv sent rate = " << usefulInvSentRate << "\n";
+    // std::cout << "Useful inv received rate = " << usefulInvReceivedRate << "\n";
 
     if (it < publicIPNodes) {
       totalUsefulInvSentRatePublicIPNode += usefulInvSentRate;
@@ -267,10 +277,39 @@ void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPN
 
     totalUsefulInvReceivedRate += usefulInvReceivedRate;
 
+
+    for (std::map<std::string,double>::iterator nodeReceivedTxTime=stats[it].txReceivedTimes.begin();
+      nodeReceivedTxTime!=stats[it].txReceivedTimes.end(); ++nodeReceivedTxTime)
+    {
+      allTxRelayTimes[nodeReceivedTxTime->first].push_back(nodeReceivedTxTime->second);
+    }
+
   }
 
+  std::vector<double> fullRelayTimes;
+
+  for (std::map<std::string, std::vector<double>>::iterator txTimes=allTxRelayTimes.begin();
+    txTimes!=allTxRelayTimes.end(); ++txTimes)
+  {
+    std::vector<double> relayTimes = txTimes->second;
+
+    if (relayTimes.size() < totalNodes * 0.75) {
+      continue;
+    }
+
+
+    auto relayStart =  *min_element(relayTimes.begin(), relayTimes.end());
+    auto relayEnd =  *max_element(relayTimes.begin(), relayTimes.end());
+    // std::vector<double> sortedRelayTimes = std::sort(relayTimes.begin(), relayTimes.end());
+    fullRelayTimes.push_back(relayEnd - relayStart);
+  }
+
+  std::cout << "Average full relay time: " << accumulate(fullRelayTimes.begin(), fullRelayTimes.end(), 0.0) / fullRelayTimes.size() << "\n";
+  std::cout << "Fully relayed transactions: " << fullRelayTimes.size() << "\n";
+
+
   std::cout << "Average useful inv sent rate (public IP nodes) =" << totalUsefulInvSentRatePublicIPNode / publicIPNodes << "\n";
-  std::cout << "Average useful inv sent rate (private IP nodes) = " << totalUsefulInvSentRatePrivateIPNode / (totalNodes - publicIPNodes) << "\n";
+  // std::cout << "Average useful inv sent rate (private IP nodes) = " << totalUsefulInvSentRatePrivateIPNode / (totalNodes - publicIPNodes) << "\n";
 
   std::cout << "Average useful inv received rate (all) = " << totalUsefulInvReceivedRate / totalNodes << "\n";
 

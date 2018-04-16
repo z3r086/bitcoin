@@ -228,9 +228,11 @@ BitcoinNode::StartApplication ()    // Called at time specified by Start
   m_nodeStats->txCreated = 0;
   m_nodeStats->connections = m_peersAddresses.size();
 
-
-
-  ScheduleNextTransactionEvent();
+  if (m_protocolType == FILTERS_ON_LINKS) {
+    AnnounceFilters();
+  } else {
+    ScheduleNextTransactionEvent();
+  }
 }
 
 void
@@ -256,6 +258,44 @@ BitcoinNode::StopApplication ()     // Called at time specified by Stop
   //PrintInvTimeouts();
 
 }
+
+void
+BitcoinNode::AnnounceFilters (void)
+{
+  int count = 0;
+  const uint8_t delimiter[] = "#";
+
+  for (std::vector<Ipv4Address>::const_iterator i = m_peersAddresses.begin(); i != m_peersAddresses.end(); ++i)
+  {
+    rapidjson::Document filterData;
+
+    rapidjson::Value value;
+    value = FILTER;
+    filterData.SetObject();
+
+    filterData.AddMember("message", value, filterData.GetAllocator());
+
+    rapidjson::Value filterValue;
+    filterValue.SetInt(count++ % 8);
+
+
+    filterData.AddMember("filter", filterValue, filterData.GetAllocator());
+
+
+    rapidjson::StringBuffer filterInfo;
+    rapidjson::Writer<rapidjson::StringBuffer> filterWriter(filterInfo);
+    filterData.Accept(filterWriter);
+
+    m_peersSockets[*i]->Send (reinterpret_cast<const uint8_t*>(filterInfo.GetString()), filterInfo.GetSize(), 0);
+    m_peersSockets[*i]->Send(delimiter, 1, 0);
+
+  }
+
+  Simulator::Schedule (Seconds(100), &BitcoinNode::ScheduleNextTransactionEvent, this);
+}
+
+
+
 void
 BitcoinNode::ScheduleNextTransactionEvent (void)
 {
@@ -323,7 +363,6 @@ BitcoinNode::EmitTransaction (void)
 
   rapidjson::StringBuffer txInfo;
   rapidjson::Writer<rapidjson::StringBuffer> txWriter(txInfo);
-  // block.Accept(blockWriter);
 
   int count = 0;
 
@@ -334,6 +373,10 @@ BitcoinNode::EmitTransaction (void)
     const uint8_t delimiter[] = "#";
     m_peersSockets[*i]->Send (reinterpret_cast<const uint8_t*>(invInfo.GetString()), invInfo.GetSize(), 0);
     m_peersSockets[*i]->Send (delimiter, 1, 0);
+
+    // to track tx gen time
+    m_nodeStats->txReceivedTimes[transactionHash] = Simulator::Now().GetSeconds();
+
 
     NS_LOG_INFO ("At time " << Simulator::Now ().GetSeconds ()
                  << "s node " << GetNode ()->GetId ()
@@ -365,8 +408,6 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
   NS_LOG_FUNCTION (this << socket);
   Ptr<Packet> packet;
   Address from;
-
-
 
   while ((packet = socket->RecvFrom (from)))
   {
@@ -426,6 +467,12 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
 
           switch (d["message"].GetInt())
           {
+            case FILTER:
+            {
+              uint32_t filter = d["filter"].GetInt();
+              filters[from] = filter;
+              break;
+            }
             case INV:
             {
               int j;
@@ -479,7 +526,12 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
               for (int j=0; j<d["transactions"].Size(); j++)
               {
                 std::string   parsedInv = d["transactions"][j].GetString();
-                AdvertiseNewTransactionInv(from, parsedInv);
+                m_nodeStats->txReceivedTimes[parsedInv] = Simulator::Now().GetSeconds();
+
+                // processing delay
+                auto delay = 0.1;
+                Simulator::Schedule(Seconds(delay), &BitcoinNode::AdvertiseNewTransactionInv, this, from, parsedInv);
+                // AdvertiseNewTransactionInv(from, parsedInv);
               }
             }
             default:
@@ -541,8 +593,14 @@ BitcoinNode::AdvertiseNewTransactionInv (Address from, const std::string transac
   inv.Accept(invWriter);
 
 
+  uint numberHash = std::hash<std::string>()(transactionHash);
+
   for (std::vector<Ipv4Address>::const_iterator i = m_peersAddresses.begin(); i != m_peersAddresses.end(); ++i)
   {
+    if (m_protocolType == FILTERS_ON_LINKS && filters[from] && (numberHash % 8) != filters[from]) {
+      continue;
+    }
+
     if ( *i != InetSocketAddress::ConvertFrom(from).GetIpv4() )
     {
       // std::cout << "node " << GetNode()->GetId() << " retransmit a packet " << transactionHash << " to " << *i << "\n";
