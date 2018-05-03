@@ -58,12 +58,11 @@ BitcoinNode::GetTypeId (void)
 
 BitcoinNode::BitcoinNode (void) : m_bitcoinPort (8333), m_secondsPerMin(60), m_countBytes (4), m_bitcoinMessageHeader (90),
                                   m_inventorySizeBytes (36), m_getHeadersSizeBytes (72), m_headersSizeBytes (81),
-                                  m_averageTransactionSize (522.4), m_transactionIndexSize (2), m_txToCreate(0)
+                                  m_averageTransactionSize (522.4), m_transactionIndexSize (2), m_txToCreate(0), m_blocksOnly(false)
 {
   NS_LOG_FUNCTION (this);
   m_socket = 0;
   m_numberOfPeers = m_peersAddresses.size();
-
 }
 
 BitcoinNode::~BitcoinNode(void)
@@ -140,6 +139,13 @@ BitcoinNode::SetProtocolType (enum ProtocolType protocolType)
 {
   NS_LOG_FUNCTION (this);
   m_protocolType = protocolType;
+}
+
+
+void
+BitcoinNode::SetMode (bool blocksOnly)
+{
+  m_blocksOnly = blocksOnly;
 }
 
 void
@@ -228,11 +234,12 @@ BitcoinNode::StartApplication ()    // Called at time specified by Start
   m_nodeStats->txCreated = 0;
   m_nodeStats->connections = m_peersAddresses.size();
 
+  m_nodeStats->blocksOnly = m_blocksOnly;
+
   if (m_protocolType == FILTERS_ON_LINKS) {
     AnnounceFilters();
-  } else {
-    ScheduleNextTransactionEvent();
   }
+  AnnounceMode();
 }
 
 void
@@ -288,11 +295,46 @@ BitcoinNode::AnnounceFilters (void)
 
     m_peersSockets[*i]->Send (reinterpret_cast<const uint8_t*>(filterInfo.GetString()), filterInfo.GetSize(), 0);
     m_peersSockets[*i]->Send(delimiter, 1, 0);
+  }
+}
+
+void
+BitcoinNode::AnnounceMode (void)
+{
+  int count = 0;
+  const uint8_t delimiter[] = "#";
+
+  for (std::vector<Ipv4Address>::const_iterator i = m_peersAddresses.begin(); i != m_peersAddresses.end(); ++i)
+  {
+    rapidjson::Document modeData;
+
+    rapidjson::Value value;
+    value = MODE;
+    modeData.SetObject();
+
+    modeData.AddMember("message", value, modeData.GetAllocator());
+
+    rapidjson::Value modeValue;
+    modeValue.SetBool(m_blocksOnly);
+
+
+    modeData.AddMember("mode", modeValue, modeData.GetAllocator());
+
+
+    rapidjson::StringBuffer modeInfo;
+    rapidjson::Writer<rapidjson::StringBuffer> modeWriter(modeInfo);
+    modeData.Accept(modeWriter);
+
+    m_peersSockets[*i]->Send (reinterpret_cast<const uint8_t*>(modeInfo.GetString()), modeInfo.GetSize(), 0);
+    m_peersSockets[*i]->Send(delimiter, 1, 0);
 
   }
 
   Simulator::Schedule (Seconds(100), &BitcoinNode::ScheduleNextTransactionEvent, this);
+  Simulator::Schedule (Seconds(100), &BitcoinNode::ScheduleNextBlockEvent, this);
+
 }
+
 
 
 
@@ -314,6 +356,54 @@ BitcoinNode::ScheduleNextTransactionEvent (void)
   NS_LOG_DEBUG ("Time " << Simulator::Now ().GetSeconds () << ": Node " << GetNode ()->GetId ()
               << " fixed Tx Time Generation " << m_fixedTxTimeGeneration << "s");
   EventId m_nextTransactionEvent = Simulator::Schedule (Seconds(m_fixedTxTimeGeneration), &BitcoinNode::EmitTransaction, this);
+}
+
+
+void
+BitcoinNode::ScheduleNextBlockEvent (void)
+{
+  int fixedBlockTimeGeneration = 60*100;
+  Simulator::Schedule (Seconds(fixedBlockTimeGeneration), &BitcoinNode::EmitBlock, this);
+}
+
+void
+BitcoinNode::EmitBlock (void)
+{
+  rapidjson::Document blockData;
+
+  rapidjson::Value value;
+  value = BLOCK;
+  blockData.SetObject();
+
+  blockData.AddMember("message", value, blockData.GetAllocator());
+
+  rapidjson::Value blockValue;
+  blockValue.SetInt(1);
+
+
+  blockData.AddMember("block", blockValue, blockData.GetAllocator());
+
+
+  rapidjson::StringBuffer blockInfo;
+  rapidjson::Writer<rapidjson::StringBuffer> blockWriter(blockInfo);
+  blockData.Accept(blockWriter);
+
+  const uint8_t delimiter[] = "#";
+
+  for (std::vector<Ipv4Address>::const_iterator i = m_peersAddresses.begin(); i != m_peersAddresses.end(); ++i)
+  {
+    if (!blocksOnlyMode[*i])
+      continue;
+
+    // Block is 1MB
+    int blockSize = 1024 * 1024;
+    m_peersSockets[*i]->Send (reinterpret_cast<const uint8_t*>(blockInfo.GetString()), blockSize, 0);
+    m_peersSockets[*i]->Send(delimiter, 1, 0);
+  }
+
+  m_nodeStats->blocksRelayed+=1;
+
+  ScheduleNextBlockEvent();
 }
 
 
@@ -473,6 +563,17 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
               filters[from] = filter;
               break;
             }
+            case MODE:
+            {
+              bool blocksOnly = d["mode"].GetBool();
+              blocksOnlyMode[from] = blocksOnly;
+              break;
+            }
+            case BLOCK:
+            {
+              bool blocksOnly = d["block"].GetInt();
+              break;
+            }
             case INV:
             {
               int j;
@@ -598,6 +699,10 @@ BitcoinNode::AdvertiseNewTransactionInv (Address from, const std::string transac
   for (std::vector<Ipv4Address>::const_iterator i = m_peersAddresses.begin(); i != m_peersAddresses.end(); ++i)
   {
     if (m_protocolType == FILTERS_ON_LINKS && filters[from] && (numberHash % 8) != filters[from]) {
+      continue;
+    }
+
+    if (blocksOnlyMode[*i]) {
       continue;
     }
 

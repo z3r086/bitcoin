@@ -88,6 +88,8 @@ public:
    */
   void SetProtocolType (enum ProtocolType protocolType);
 
+  void SetMode (bool blocksOnly);
+
 protected:
   virtual void DoDispose (void);           // inherited from Application base class.
 
@@ -122,9 +124,14 @@ protected:
 
 
   void AnnounceFilters(void);
+  void AnnounceMode(void);
 
   void ScheduleNextTransactionEvent(void);
   void EmitTransaction(void);
+
+  void ScheduleNextBlockEvent(void);
+  void EmitBlock(void);
+
 
   void AdvertiseNewTransactionInv (Address from, const std::string transactionHash);
 
@@ -176,7 +183,11 @@ protected:
   bool            m_spv;                              //!< Simplified Payment Verification. Used only in conjuction with blockTorrent
   uint m_fixedTxTimeGeneration;
 
+
+  bool m_blocksOnly;
+
   std::map<Address, uint32_t> filters;
+  std::map<Address, bool> blocksOnlyMode;
 
   uint lastTxId;
   std::vector<std::string> knownTxHashes;

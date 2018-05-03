@@ -22,7 +22,9 @@ enum Messages
   INV,              //0
   GET_DATA,         //1
   TX,
-  FILTER
+  FILTER,
+  MODE,
+  BLOCK
 };
 
 enum ProtocolType
@@ -73,6 +75,10 @@ typedef struct {
   int64_t     getDataSentMessages;
   int64_t txCreated;
   int      connections;
+
+  int      blocksRelayed;
+
+  bool blocksOnly;
 
   std::map<std::string, double> txReceivedTimes;
 } nodeStatistics;

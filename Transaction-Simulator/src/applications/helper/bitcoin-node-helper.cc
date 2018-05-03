@@ -84,6 +84,7 @@ BitcoinNodeHelper::InstallPriv (Ptr<Node> node)
   app->SetNodeStats(m_nodeStats);
   app->SetProperties(m_txToCreate);
   app->SetProtocolType(m_protocolType);
+  app->SetMode(m_blocksOnly);
 
   node->AddApplication (app);
 
@@ -122,9 +123,10 @@ BitcoinNodeHelper::SetNodeStats (nodeStatistics *nodeStats)
 }
 
 void
-BitcoinNodeHelper::SetProperties (uint64_t txToCreate)
+BitcoinNodeHelper::SetProperties (uint64_t txToCreate, bool blocksOnly)
 {
   m_txToCreate = txToCreate;
+  m_blocksOnly = blocksOnly;
 }
 
 void
@@ -132,4 +134,6 @@ BitcoinNodeHelper::SetProtocolType (enum ProtocolType protocolType)
 {
   m_protocolType = protocolType;
 }
+
+
 } // namespace ns3

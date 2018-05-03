@@ -105,7 +105,7 @@ public:
   void SetNodeInternetSpeeds (nodeInternetSpeeds &internetSpeeds);
 
   void SetNodeStats (nodeStatistics *nodeStats);
-  void SetProperties (uint64_t txToCreate);
+  void SetProperties (uint64_t txToCreate, bool blocksOnly);
 
   void SetProtocolType (enum ProtocolType protocolType);
 
@@ -131,6 +131,7 @@ protected:
   uint64_t m_txToCreate;
 
   enum ProtocolType									  m_protocolType;         //!< The protocol that the nodes use to advertise new blocks (DEFAULT: STANDARD)
+  bool									              m_blocksOnly;
 
 };
 

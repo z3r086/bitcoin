@@ -34,7 +34,7 @@ using namespace ns3;
 
 double get_wall_time();
 int GetNodeIdByIpv4 (Ipv4InterfaceContainer container, Ipv4Address addr);
-void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPNodes);
+void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPNodes, int blocksOnlyPrivateIpNodes);
 void PrintTotalStats (nodeStatistics *stats, int totalNodes, double start, double finish, double averageBlockGenIntervalMinutes, bool relayNetwork);
 void PrintBitcoinRegionStats (uint32_t *bitcoinNodesRegions, uint32_t totalNodes);
 
@@ -62,7 +62,7 @@ main (int argc, char *argv[])
 
 
   uint64_t txToCreate = 1024;
-  int publicIPNodes;
+  int publicIPNodes, blocksOnlyPrivateIpNodes;
 
   double stop;
 
@@ -85,9 +85,11 @@ main (int argc, char *argv[])
   cmd.AddValue ("invTimeoutMins", "The inv block timeout", invTimeoutMins);
   cmd.AddValue ("test", "Test the scalability of the simulation", testScalability);
 
-  cmd.AddValue ("txToCreatePerNode", "The number of transactions each of the chosen nodes should generate", txToCreate);
+  cmd.AddValue ("txToCreate", "The number of transactions each the network should generate", txToCreate);
 
   cmd.AddValue ("publicIPNodes", "How many nodes has public IP", publicIPNodes);
+
+  cmd.AddValue ("blocksOnlyPrivateIPNodes", "How many nodes with private IP run blocksOnly", blocksOnlyPrivateIpNodes);
 
   cmd.AddValue ("protocolType", "Used protocol: 0 — Default, 1 — Filters on links", protocol);
 
@@ -137,6 +139,11 @@ main (int argc, char *argv[])
                                         nodesConnections[0], peersDownloadSpeeds[0],  peersUploadSpeeds[0], nodesInternetSpeeds[0], stats, ProtocolType(protocol));
   ApplicationContainer bitcoinNodes;
 
+
+  int startedblocksOnlyPrivateIpNodes;
+
+  int averageTxPerNode = txToCreate / (totalNoNodes - publicIPNodes);
+
   for(auto &node : nodesConnections)
   {
     Ptr<Node> targetNode = bitcoinTopologyHelper.GetNode (node.first);
@@ -148,11 +155,21 @@ main (int argc, char *argv[])
       bitcoinNodeHelper.SetPeersUploadSpeeds (peersUploadSpeeds[node.first]);
       bitcoinNodeHelper.SetNodeInternetSpeeds (nodesInternetSpeeds[node.first]);
 
-      // Setting tx to create limit
       if (nodesInSystemId0 < publicIPNodes) {
-        bitcoinNodeHelper.SetProperties(0);
+        bitcoinNodeHelper.SetProperties(0, false);
       } else {
-        bitcoinNodeHelper.SetProperties(txToCreate);
+        auto nodeTxNum = 0;
+        if (txToCreate > 0) {
+          // Some distribution
+          nodeTxNum = (rand() % 4) * averageTxPerNode;
+          txToCreate -= nodeTxNum;
+        }
+
+        if (blocksOnlyPrivateIpNodes >= startedblocksOnlyPrivateIpNodes++) {
+          bitcoinNodeHelper.SetProperties(nodeTxNum, true);
+        } else {
+          bitcoinNodeHelper.SetProperties(nodeTxNum, false);
+        }
       }
 
   	  bitcoinNodeHelper.SetNodeStats (&stats[node.first]);
@@ -189,7 +206,7 @@ main (int argc, char *argv[])
   {
     tFinish=get_wall_time();
 
-    PrintStatsForEachNode(stats, totalNoNodes, publicIPNodes);
+    PrintStatsForEachNode(stats, totalNoNodes, publicIPNodes, blocksOnlyPrivateIpNodes);
     // PrintTotalStats(stats, totalNoNodes, tStartSimulation, tFinish, averageBlockGenIntervalMinutes, relayNetwork);
 
 
@@ -232,7 +249,7 @@ int GetNodeIdByIpv4 (Ipv4InterfaceContainer container, Ipv4Address addr)
   return -1; //if not found
 }
 
-void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPNodes)
+void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPNodes, int blocksOnlyPrivateIpNodes)
 {
   float totalUsefulInvSentRatePublicIPNode = 0;
   float totalUsefulInvSentRatePrivateIPNode = 0;
@@ -251,9 +268,8 @@ void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPN
     std::cout << "GetData sent = " << stats[it].getDataSentMessages << "\n";
     std::cout << "GetData received = " << stats[it].getDataReceivedMessages << "\n";
 
-    std::cout << "GetData sent = " << stats[it].getDataSentMessages << "\n";
-    std::cout << "GetData received = " << stats[it].getDataReceivedMessages << "\n";
-
+    std::cout << "Blocks only = " << stats[it].blocksOnly << "\n";
+    std::cout << "Blocks relayed = " << stats[it].blocksRelayed << "\n";
 
 
     float usefulInvSentRate = float(stats[it].getDataReceivedMessages) / stats[it].invSentMessages;
@@ -293,7 +309,8 @@ void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPN
   {
     std::vector<double> relayTimes = txTimes->second;
 
-    if (relayTimes.size() < totalNodes * 0.75) {
+    if (relayTimes.size() < (totalNodes - blocksOnlyPrivateIpNodes) * 0.75) {
+      std::cout << "Relayed: " << relayTimes.size() << ", to be full relay: " << (totalNodes - blocksOnlyPrivateIpNodes) * 0.75 << std::endl;
       continue;
     }
 
@@ -305,6 +322,7 @@ void PrintStatsForEachNode (nodeStatistics *stats, int totalNodes, int publicIPN
   }
 
   std::cout << "Average full relay time: " << accumulate(fullRelayTimes.begin(), fullRelayTimes.end(), 0.0) / fullRelayTimes.size() << "\n";
+  std::cout << "Generated transactions: " << allTxRelayTimes.size() << "\n";
   std::cout << "Fully relayed transactions: " << fullRelayTimes.size() << "\n";
 
 
