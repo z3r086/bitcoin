@@ -260,10 +260,6 @@ BitcoinNode::StopApplication ()     // Called at time specified by Stop
   }
 
   NS_LOG_WARN ("\n\nBITCOIN NODE " << GetNode ()->GetId () << ":");
-  //m_blockchain.PrintOrphans();
-  //PrintQueueInv();
-  //PrintInvTimeouts();
-
 }
 
 void
@@ -433,7 +429,7 @@ BitcoinNode::EmitTransaction (void)
   rapidjson::Value array(rapidjson::kArrayType);
   rapidjson::Value transactionInfo(rapidjson::kObjectType);
 
-  value.SetString("tx"); //Remove
+  value.SetString("tx");
   inv.AddMember("type", value, inv.GetAllocator());
 
   value = INV;
@@ -445,7 +441,6 @@ BitcoinNode::EmitTransaction (void)
   inv.AddMember("inv", array, inv.GetAllocator());
 
 
-  // Stringify the DOM
   rapidjson::StringBuffer invInfo;
   rapidjson::Writer<rapidjson::StringBuffer> invWriter(invInfo);
   inv.Accept(invWriter);
@@ -476,14 +471,6 @@ BitcoinNode::EmitTransaction (void)
         m_nodeStats->invSentMessages += 1;
 
   }
-
-  // m_minerAverageBlockGenInterval = m_minerGeneratedBlocks/static_cast<double>(m_minerGeneratedBlocks+1)*m_minerAverageBlockGenInterval
-  //                                + (Simulator::Now ().GetSeconds () - m_previousBlockGenerationTime)/(m_minerGeneratedBlocks+1);
-  // m_minerAverageBlockSize = m_minerGeneratedBlocks/static_cast<double>(m_minerGeneratedBlocks+1)*m_minerAverageBlockSize
-  //                         + static_cast<double>(m_nextBlockSize)/(m_minerGeneratedBlocks+1);
-  // m_previousBlockGenerationTime = Simulator::Now ().GetSeconds ();
-  // m_minerGeneratedBlocks++;
-
 
   if (m_nodeStats->txCreated >= m_txToCreate)
     return;
@@ -677,7 +664,7 @@ BitcoinNode::AdvertiseNewTransactionInv (Address from, const std::string transac
   rapidjson::Value array(rapidjson::kArrayType);
   rapidjson::Value transactionInfo(rapidjson::kObjectType);
 
-  value.SetString("tx"); //Remove
+  value.SetString("tx");
   inv.AddMember("type", value, inv.GetAllocator());
 
   value = INV;
