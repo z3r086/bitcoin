@@ -30,6 +30,7 @@
 #include <fstream>
 #include <time.h>
 #include <sys/time.h>
+#include <array>
 
 static double GetWallTime();
 namespace ns3 {
@@ -312,21 +313,6 @@ BitcoinTopologyHelper::AssignIpv4Addresses (Ipv4AddressHelperCustom ip)
 	m_peersUploadSpeeds[node2][interfaceAddress1] = m_nodesInternetSpeeds[node1].uploadSpeed;
   }
 
-
-/*   //Print the nodes' connections
-  if (m_systemId == 0)
-  {
-    std::cout << "The nodes connections are:" << std::endl;
-    for(auto &node : m_nodesConnectionsIps)
-    {
-  	  std::cout << "\nNode " << node.first << ":    " ;
-	  for(std::vector<Ipv4Address>::const_iterator it = node.second.begin(); it != node.second.end(); it++)
-	  {
-        std::cout  << "\t" << *it ;
-	  }
-    }
-    std::cout << "\n" << std::endl;
-  } */
 
   tFinish = GetWallTime();
   if (m_systemId == 0)
