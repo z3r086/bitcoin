@@ -236,9 +236,9 @@ BitcoinNode::StartApplication ()    // Called at time specified by Start
 
   m_nodeStats->blocksOnly = m_blocksOnly;
 
-  if (m_protocolType == FILTERS_ON_LINKS) {
-    AnnounceFilters();
-  }
+  // if (m_protocolType == FILTERS_ON_LINKS) {
+  //   AnnounceFilters();
+  // }
   AnnounceMode();
 }
 
@@ -327,7 +327,7 @@ BitcoinNode::AnnounceMode (void)
   }
 
   Simulator::Schedule (Seconds(100), &BitcoinNode::ScheduleNextTransactionEvent, this);
-  Simulator::Schedule (Seconds(100), &BitcoinNode::ScheduleNextBlockEvent, this);
+  // Simulator::Schedule (Seconds(100), &BitcoinNode::ScheduleNextBlockEvent, this);
 
 }
 
@@ -343,8 +343,8 @@ BitcoinNode::ScheduleNextTransactionEvent (void)
   if (m_fixedTxTimeGeneration == 0)
     m_fixedTxTimeGeneration = 100;
 
-    if (m_txToCreate == 0)
-      return;
+  if (m_txToCreate == 0)
+    return;
 
 
   uint m_nextTxTime = m_fixedTxTimeGeneration;
@@ -421,6 +421,7 @@ BitcoinNode::EmitTransaction (void)
   inv.SetObject();
   tx.SetObject();
 
+  std::cout << "Emitting Tx: " <<  transactionHash << "\n";
 
   Transaction newTx (currentTime, currentTime, Ipv4Address("127.0.0.1"));
 
@@ -485,6 +486,8 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
   NS_LOG_FUNCTION (this << socket);
   Ptr<Packet> packet;
   Address from;
+
+  std::cout << "Handling read: " <<  "\n";
 
   while ((packet = socket->RecvFrom (from)))
   {
@@ -570,10 +573,10 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
               {
                 std::string   parsedInv = d["inv"][j].GetString();
                 if(std::find(knownTxHashes.begin(), knownTxHashes.end(), parsedInv) != knownTxHashes.end()) {
-                  // std::cout << "Node: " <<  GetNode()->GetId() << ", got dup: " << parsedInv << " From: " <<  InetSocketAddress::ConvertFrom(from).GetIpv4() << "\n";
+                  std::cout << "Node: " <<  GetNode()->GetId() << ", got dup: " << parsedInv << " From: " <<  InetSocketAddress::ConvertFrom(from).GetIpv4() << "\n";
                   continue;
-                // } else {
-                //   std::cout << "Node: " <<  GetNode()->GetId() << ", got first time: " << parsedInv << " From: " <<  InetSocketAddress::ConvertFrom(from).GetIpv4() << "\n";
+                } else {
+                  std::cout << "Node: " <<  GetNode()->GetId() << ", got first time: " << parsedInv << " From: " <<  InetSocketAddress::ConvertFrom(from).GetIpv4() << "\n";
                 }
                 knownTxHashes.push_back(parsedInv);
 

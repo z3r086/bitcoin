@@ -158,18 +158,25 @@ main (int argc, char *argv[])
       if (nodesInSystemId0 < publicIPNodes) {
         bitcoinNodeHelper.SetProperties(0, false);
       } else {
-        auto nodeTxNum = 0;
-        if (txToCreate > 0) {
-          // Some distribution
-          nodeTxNum = (rand() % 4) * averageTxPerNode;
-          txToCreate -= nodeTxNum;
+        if (averageTxPerNode != 0) {
+          bitcoinNodeHelper.SetProperties(1000, false);
+          averageTxPerNode = 0;
+        } else {
+          bitcoinNodeHelper.SetProperties(0, false);
         }
 
-        if (blocksOnlyPrivateIpNodes >= startedblocksOnlyPrivateIpNodes++) {
-          bitcoinNodeHelper.SetProperties(nodeTxNum, true);
-        } else {
-          bitcoinNodeHelper.SetProperties(nodeTxNum, false);
-        }
+        // auto nodeTxNum = 0;
+        // if (txToCreate > 0) {
+        //   // Some distribution
+        //   nodeTxNum = (rand() % 4) * averageTxPerNode;
+        //   txToCreate -= nodeTxNum;
+        // }
+        //
+        // if (blocksOnlyPrivateIpNodes >= startedblocksOnlyPrivateIpNodes++) {
+        //   bitcoinNodeHelper.SetProperties(nodeTxNum, true);
+        // } else {
+        //   bitcoinNodeHelper.SetProperties(nodeTxNum, false);
+        // }
       }
 
   	  bitcoinNodeHelper.SetNodeStats (&stats[node.first]);

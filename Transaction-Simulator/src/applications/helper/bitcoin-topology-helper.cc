@@ -82,11 +82,24 @@ BitcoinTopologyHelper::BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoN
       m_maxConnections[i] = m_minConnectionsPerNode;
     else
       m_maxConnections[i] = m_maxConnectionsPerNode;
+		// Simulation for poisson PR
+		if (i == 0) {
+			m_minConnections[i] = m_totalNoNodes - 1;
+			m_maxConnections[i] = m_totalNoNodes - 1;
+		}
   }
 
   for(int i = 0; i < m_totalNoNodes; i++)
   {
 	int count = 0;
+
+		// Simulation for poisson PR
+		if (i > 0) {
+			uint32_t candidatePeer = nodes[0];
+			m_nodesConnections[i].push_back(candidatePeer);
+			m_nodesConnections[candidatePeer].push_back(i);
+		}
+
 
     while (m_nodesConnections[i].size() < m_minConnections[i] && count < 10*m_minConnections[i])
     {

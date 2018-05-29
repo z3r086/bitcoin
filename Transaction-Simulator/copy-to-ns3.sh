@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Configure the following values
-RAPIDJSON_FOLDER=~/workspace/rapidjson
-NS3_FOLDER=~/workspace/bake/source/ns-3.27
+RAPIDJSON_FOLDER=~/work/rapidjson
+NS3_FOLDER=~/work/bake/source/ns-3.28
 
 # Do not change
 # mkdir $NS3_FOLDER/rapidjson
