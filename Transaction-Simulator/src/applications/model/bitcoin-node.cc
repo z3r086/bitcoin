@@ -232,14 +232,16 @@ BitcoinNode::StartApplication ()    // Called at time specified by Start
   m_nodeStats->getDataReceivedBytes = 0;
   m_nodeStats->getDataSentBytes = 0;
   m_nodeStats->txCreated = 0;
+  m_nodeStats->blocksRelayed = 0;
   m_nodeStats->connections = m_peersAddresses.size();
 
   m_nodeStats->blocksOnly = m_blocksOnly;
 
-  // if (m_protocolType == FILTERS_ON_LINKS) {
-  //   AnnounceFilters();
-  // }
+  if (m_protocolType == FILTERS_ON_LINKS) {
+    AnnounceFilters();
+  }
   AnnounceMode();
+
 }
 
 void
@@ -337,15 +339,14 @@ BitcoinNode::AnnounceMode (void)
 void
 BitcoinNode::ScheduleNextTransactionEvent (void)
 {
+  if (m_txToCreate == 0)
+    return;
+
   NS_LOG_FUNCTION (this);
 
   // TODO Fix
   if (m_fixedTxTimeGeneration == 0)
     m_fixedTxTimeGeneration = 100;
-
-  if (m_txToCreate == 0)
-    return;
-
 
   uint m_nextTxTime = m_fixedTxTimeGeneration;
 

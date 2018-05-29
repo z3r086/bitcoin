@@ -159,7 +159,7 @@ main (int argc, char *argv[])
         bitcoinNodeHelper.SetProperties(0, false);
       } else {
         if (averageTxPerNode != 0) {
-          bitcoinNodeHelper.SetProperties(1000, false);
+          bitcoinNodeHelper.SetProperties(txToCreate, false);
           averageTxPerNode = 0;
         } else {
           bitcoinNodeHelper.SetProperties(0, false);
