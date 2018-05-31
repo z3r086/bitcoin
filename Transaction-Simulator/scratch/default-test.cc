@@ -142,7 +142,7 @@ main (int argc, char *argv[])
 
   int startedblocksOnlyPrivateIpNodes;
 
-  int averageTxPerNode = txToCreate / (totalNoNodes - publicIPNodes);
+  int averageTxPerNode = (totalNoNodes == publicIPNodes) ? (txToCreate / totalNoNodes) : (txToCreate / (totalNoNodes - publicIPNodes));
 
   for(auto &node : nodesConnections)
   {
