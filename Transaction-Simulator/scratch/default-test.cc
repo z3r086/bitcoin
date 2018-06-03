@@ -158,7 +158,7 @@ main (int argc, char *argv[])
       bitcoinNodeHelper.SetNodeInternetSpeeds (nodesInternetSpeeds[node.first]);
 
       if (nodesInSystemId0 < publicIPNodes) {
-        bitcoinNodeHelper.SetProperties(0, false);
+        bitcoinNodeHelper.SetProperties(0, false, netGroups);
       } else {
         auto nodeTxNum = 0;
         if (txToCreate > 0) {
@@ -168,9 +168,9 @@ main (int argc, char *argv[])
         }
 
         if (blocksOnlyPrivateIpNodes >= startedblocksOnlyPrivateIpNodes++) {
-          bitcoinNodeHelper.SetProperties(nodeTxNum, true);
+          bitcoinNodeHelper.SetProperties(nodeTxNum, true, netGroups);
         } else {
-          bitcoinNodeHelper.SetProperties(nodeTxNum, false);
+          bitcoinNodeHelper.SetProperties(nodeTxNum, false, netGroups);
         }
       }
 

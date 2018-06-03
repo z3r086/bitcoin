@@ -609,6 +609,8 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
                 std::string   parsedInv = d["transactions"][j].GetString();
                 m_nodeStats->txReceivedTimes[parsedInv] = Simulator::Now().GetSeconds();
 
+                int hopNumber = d["hop"].GetInt();
+
                 // processing delay
                 auto delay = 10;
                 Simulator::Schedule(Seconds(delay), &BitcoinNode::AdvertiseNewTransactionInv, this, from, parsedInv, hopNumber + 1);
