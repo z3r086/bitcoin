@@ -88,6 +88,8 @@ public:
    */
   void SetProtocolType (enum ProtocolType protocolType);
 
+  void SetNetGroups (int netGroups);
+
   void SetMode (bool blocksOnly);
 
 protected:
@@ -133,7 +135,9 @@ protected:
   void EmitBlock(void);
 
 
-  void AdvertiseNewTransactionInv (Address from, const std::string transactionHash);
+  void AdvertiseNewTransactionInv (Address from, const std::string transactionHash, int hopNumber);
+
+  void SendInvToNode(Ipv4Address receiver, const std::string transactionHash, int hopNumber);
 
   /**
    * \brief Sends a message to a peer
@@ -192,7 +196,6 @@ protected:
   uint lastTxId;
   std::vector<std::string> knownTxHashes;
 
-
   uint32_t sentOriginalInvs;
   uint32_t retransmittedInvs;
   uint32_t gotGetData;
@@ -219,6 +222,7 @@ protected:
   std::vector<double>                                 m_receiveCompressedBlockTimes;    //!< contains the times of the next sendBlock events
   enum ProtocolType                                   m_protocolType;                   //!< protocol type
 
+  int m_netGroups;
 
   uint64_t       m_txToCreate;
 
