@@ -75,6 +75,8 @@ main (int argc, char *argv[])
   std::map<uint32_t, nodeInternetSpeeds>               nodesInternetSpeeds;
   int                                                  nodesInSystemId0 = 0;
 
+  int netGroups = 0;
+
   Time::SetResolution (Time::NS);
 
   CommandLine cmd;
@@ -92,15 +94,18 @@ main (int argc, char *argv[])
   cmd.AddValue ("blocksOnlyPrivateIPNodes", "How many nodes with private IP run blocksOnly", blocksOnlyPrivateIpNodes);
 
   cmd.AddValue ("protocolType", "Used protocol: 0 — Default, 1 — Filters on links", protocol);
+  cmd.AddValue ("netGroups", "How many groups each node has", netGroups);
 
 
   cmd.Parse(argc, argv);
 
+  assert(netGroups > 0);
+
   // TODO Configure
   uint averageBlockGenInterval = 10 * 60;
-  uint targetNumberOfBlocks = 100;
+  uint targetNumberOfBlocks = 10000;
 
-  stop = targetNumberOfBlocks * averageBlockGenInterval; //seconds
+  stop = targetNumberOfBlocks * averageBlockGenInterval / 60; // minutes
   nodeStatistics *stats = new nodeStatistics[totalNoNodes];
 
   uint32_t systemId = 0;
@@ -111,9 +116,6 @@ main (int argc, char *argv[])
 
   BitcoinTopologyHelper bitcoinTopologyHelper (systemCount, totalNoNodes, publicIPNodes, minConnectionsPerNode,
                                                maxConnectionsPerNode, systemId);
-
-
-
 
   // Install stack on Grid
   InternetStackHelper stack;

@@ -86,6 +86,8 @@ BitcoinNodeHelper::InstallPriv (Ptr<Node> node)
   app->SetProtocolType(m_protocolType);
   app->SetMode(m_blocksOnly);
 
+  app->SetNetGroups(m_netGroups);
+
   node->AddApplication (app);
 
   return app;
@@ -123,10 +125,11 @@ BitcoinNodeHelper::SetNodeStats (nodeStatistics *nodeStats)
 }
 
 void
-BitcoinNodeHelper::SetProperties (uint64_t txToCreate, bool blocksOnly)
+BitcoinNodeHelper::SetProperties (uint64_t txToCreate, bool blocksOnly, int netGroups)
 {
   m_txToCreate = txToCreate;
   m_blocksOnly = blocksOnly;
+  m_netGroups = netGroups;
 }
 
 void
