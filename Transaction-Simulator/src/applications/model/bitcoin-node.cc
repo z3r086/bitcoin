@@ -27,7 +27,7 @@ NS_LOG_COMPONENT_DEFINE ("BitcoinNode");
 
 NS_OBJECT_ENSURE_REGISTERED (BitcoinNode);
 
-int invIntervalSeconds = 10 * 1000;
+int invIntervalSeconds = 10 * 100;
 
 TypeId
 BitcoinNode::GetTypeId (void)
@@ -61,12 +61,15 @@ BitcoinNode::GetTypeId (void)
 
 BitcoinNode::BitcoinNode (void) : m_bitcoinPort (8333), m_secondsPerMin(60), m_countBytes (4), m_bitcoinMessageHeader (90),
                                   m_inventorySizeBytes (36), m_getHeadersSizeBytes (72), m_headersSizeBytes (81),
-                                  m_averageTransactionSize (522.4), m_transactionIndexSize (2), m_txToCreate(0), m_blocksOnly(false),
+                                  m_averageTransactionSize (522.4), m_txToCreate(0), m_mode(REGULAR),
                                   m_netGroups(2)
 {
   NS_LOG_FUNCTION (this);
   m_socket = 0;
+  heardTotal = 0;
+  firstTimeHops = std::vector<int>(8);
   m_numberOfPeers = m_peersAddresses.size();
+  txCreator = false;
 }
 
 BitcoinNode::~BitcoinNode(void)
@@ -132,31 +135,15 @@ BitcoinNode::SetNodeStats (nodeStatistics *nodeStats)
 }
 
 void
-BitcoinNode::SetProperties (uint64_t txToCreate)
+BitcoinNode::SetProperties (uint64_t txToCreate, enum ProtocolType protocol, enum ModeType mode, int netGroups)
 {
   NS_LOG_FUNCTION (this);
   m_txToCreate = txToCreate;
-}
-
-void
-BitcoinNode::SetProtocolType (enum ProtocolType protocolType)
-{
-  NS_LOG_FUNCTION (this);
-  m_protocolType = protocolType;
-}
-
-void
-BitcoinNode::SetNetGroups (int netGroups)
-{
-  NS_LOG_FUNCTION (this);
+  if (txToCreate > 0)
+    txCreator = true;
+  m_protocol = protocol;
+  m_mode = mode;
   m_netGroups = netGroups;
-}
-
-
-void
-BitcoinNode::SetMode (bool blocksOnly)
-{
-  m_blocksOnly = blocksOnly;
 }
 
 void
@@ -182,7 +169,6 @@ BitcoinNode::StartApplication ()    // Called at time specified by Start
   NS_LOG_INFO ("Node " << GetNode()->GetId() << ": upload speed = " << m_uploadSpeed << " B/s");
   NS_LOG_INFO ("Node " << GetNode()->GetId() << ": m_numberOfPeers = " << m_numberOfPeers);
   NS_LOG_INFO ("Node " << GetNode()->GetId() << ": m_invTimeoutMinutes = " << m_invTimeoutMinutes.GetMinutes() << "mins");
-  NS_LOG_WARN ("Node " << GetNode()->GetId() << ": m_protocolType = " << getProtocolType(m_protocolType));
 
   NS_LOG_INFO ("Node " << GetNode()->GetId() << ": My peers are");
 
@@ -190,11 +176,6 @@ BitcoinNode::StartApplication ()    // Called at time specified by Start
     NS_LOG_INFO("\t" << *it);
 
   double currentMax = 0;
-
-  for(auto it = m_peersDownloadSpeeds.begin(); it != m_peersDownloadSpeeds.end(); ++it )
-  {
-    //std::cout << "Node " << GetNode()->GetId() << ": peer " << it->first << "download speed = " << it->second << " Mbps" << std::endl;
-  }
 
   if (!m_socket)
   {
@@ -246,9 +227,9 @@ BitcoinNode::StartApplication ()    // Called at time specified by Start
   m_nodeStats->blocksRelayed = 0;
   m_nodeStats->connections = m_peersAddresses.size();
 
-  m_nodeStats->blocksOnly = m_blocksOnly;
+  m_nodeStats->blocksOnly = m_mode == (BLOCKS_ONLY);
 
-  if (m_protocolType == FILTERS_ON_LINKS) {
+  if (m_protocol == FILTERS_ON_LINKS) {
     AnnounceFilters();
   }
   AnnounceMode();
@@ -324,7 +305,7 @@ BitcoinNode::AnnounceMode (void)
     modeData.AddMember("message", value, modeData.GetAllocator());
 
     rapidjson::Value modeValue;
-    modeValue.SetBool(m_blocksOnly);
+    modeValue.SetInt(m_mode);
 
 
     modeData.AddMember("mode", modeValue, modeData.GetAllocator());
@@ -336,23 +317,21 @@ BitcoinNode::AnnounceMode (void)
 
     m_peersSockets[*i]->Send (reinterpret_cast<const uint8_t*>(modeInfo.GetString()), modeInfo.GetSize(), 0);
     m_peersSockets[*i]->Send(delimiter, 1, 0);
-
   }
 
   Simulator::Schedule (Seconds(1000), &BitcoinNode::ScheduleNextTransactionEvent, this);
-  // Simulator::Schedule (Seconds(100), &BitcoinNode::ScheduleNextBlockEvent, this);
 
 }
 
-int MurmurHash3Mixer(int key)
-  {
+int MurmurHash3Mixer(int key) // TODO a better hash function
+{
   key ^= (key >> 13);
   key *= 0xff51afd7ed558ccd;
   key ^= (key >> 13);
   key *= 0xc4ceb9fe1a85ec53;
   key ^= (key >> 13);
   return key;
-  }
+}
 
 
 std::map<int, int64_t> lastGroupInv;
@@ -424,8 +403,9 @@ BitcoinNode::EmitBlock (void)
 
   for (std::vector<Ipv4Address>::const_iterator i = m_peersAddresses.begin(); i != m_peersAddresses.end(); ++i)
   {
-    if (!blocksOnlyMode[*i])
+    if (peersMode[*i] != REGULAR) {
       continue;
+    }
 
     // Block is 1MB
     int blockSize = 1024 * 1024;
@@ -545,13 +525,8 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
             }
             case MODE:
             {
-              bool blocksOnly = d["mode"].GetBool();
-              blocksOnlyMode[from] = blocksOnly;
-              break;
-            }
-            case BLOCK:
-            {
-              bool blocksOnly = d["block"].GetInt();
+              ModeType mode = ModeType(d["mode"].GetInt());
+              peersMode[from] = mode;
               break;
             }
             case INV:
@@ -562,60 +537,75 @@ BitcoinNode::HandleRead (Ptr<Socket> socket)
               for (j=0; j<d["inv"].Size(); j++)
               {
                 std::string   parsedInv = d["inv"][j].GetString();
+                int   hopNumber = d["hop"].GetInt();
+
                 if(std::find(knownTxHashes.begin(), knownTxHashes.end(), parsedInv) != knownTxHashes.end()) {
-                  std::cout << "Node: " <<  GetNode()->GetId() << ", got dup: " << parsedInv << " From: " <<  InetSocketAddress::ConvertFrom(from).GetIpv4() << "\n";
                   continue;
                 } else {
-                  std::cout << "Node: " <<  GetNode()->GetId() << ", got first time: " << parsedInv << " From: " <<  InetSocketAddress::ConvertFrom(from).GetIpv4() << "\n";
+                  m_nodeStats->txReceivedTimes[parsedInv] = Simulator::Now().GetSeconds();
+
+                  auto delay = 10;
+                  Simulator::Schedule(Seconds(delay), &BitcoinNode::AdvertiseNewTransactionInv, this, from, parsedInv, hopNumber + 1);
+                  if (m_mode == SPY) {
+                    heardTotal++;
+
+                    std::cout << "----------------------------" << std::endl;
+                    firstTimeHops[hopNumber]++;
+                    std::cout << "0: " << (float)firstTimeHops[0] / heardTotal << std::endl;
+                    std::cout << "1: " << (float)firstTimeHops[1] / heardTotal << std::endl;
+                    std::cout << "2: " << (float)firstTimeHops[2] / heardTotal << std::endl;
+                    std::cout << "3: " << (float)firstTimeHops[3] / heardTotal << std::endl;
+
+                    std::cout << knownTxHashes.size() << ", Fraction heard from creator: " << (float)firstTimeHops[0] / heardTotal << std::endl;
+                  }
+                  // std::cout << "Node: " <<  GetNode()->GetId() << ", got first time: " << parsedInv << " From: " <<  InetSocketAddress::ConvertFrom(from).GetIpv4() << "\n";
                 }
                 knownTxHashes.push_back(parsedInv);
-
-                requestTxs.push_back(parsedInv);
+                // requestTxs.push_back(parsedInv);
               }
 
               // Do not need to send getData
-              if (requestTxs.size() == 0)
-                break;
-
-              rapidjson::Value   value;
-              rapidjson::Value   array(rapidjson::kArrayType);
-              d.RemoveMember("inv");
-
-              for (auto tx_it = requestTxs.begin(); tx_it < requestTxs.end(); tx_it++)
-              {
-                value.SetString(tx_it->c_str(), tx_it->size(), d.GetAllocator());
-                array.PushBack(value, d.GetAllocator());
-              }
-
-              d.AddMember("transactions", array, d.GetAllocator());
-              SendMessage(INV, GET_DATA, d, from);
+              // if (requestTxs.size() == 0)
+              //   break;
+              //
+              // rapidjson::Value   value;
+              // rapidjson::Value   array(rapidjson::kArrayType);
+              // d.RemoveMember("inv");
+              //
+              // for (auto tx_it = requestTxs.begin(); tx_it < requestTxs.end(); tx_it++)
+              // {
+              //   value.SetString(tx_it->c_str(), tx_it->size(), d.GetAllocator());
+              //   array.PushBack(value, d.GetAllocator());
+              // }
+              //
+              // d.AddMember("transactions", array, d.GetAllocator());
+              // // SendMessage(INV, GET_DATA, d, from);
               break;
             }
-            case GET_DATA:
-            {
-              NS_LOG_INFO ("GET_DATA");
-              m_nodeStats->getDataReceivedMessages += 1;
-              SendMessage(GET_DATA, TX, d, from);
-              break;
-            }
-            case TX:
-            {
-              rapidjson::StringBuffer buffer;
-              rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
-              d.Accept(writer);
-
-              for (int j=0; j<d["transactions"].Size(); j++)
-              {
-                std::string   parsedInv = d["transactions"][j].GetString();
-                m_nodeStats->txReceivedTimes[parsedInv] = Simulator::Now().GetSeconds();
-
-                int hopNumber = d["hop"].GetInt();
-
-                // processing delay
-                auto delay = 10;
-                Simulator::Schedule(Seconds(delay), &BitcoinNode::AdvertiseNewTransactionInv, this, from, parsedInv, hopNumber + 1);
-              }
-            }
+            // case GET_DATA:
+            // {
+            //   NS_LOG_INFO ("GET_DATA");
+            //   m_nodeStats->getDataReceivedMessages += 1;
+            //   SendMessage(GET_DATA, TX, d, from);
+            //   break;
+            // }
+            // case TX:
+            // {
+            //   rapidjson::StringBuffer buffer;
+            //   rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+            //   d.Accept(writer);
+            //
+            //   for (int j=0; j<d["transactions"].Size(); j++)
+            //   {
+            //     std::string   parsedInv = d["transactions"][j].GetString();
+            //     int   hopNumber = d["hop"].GetInt();
+            //     m_nodeStats->txReceivedTimes[parsedInv] = Simulator::Now().GetSeconds();
+            //
+            //     // processing delay
+            //     auto delay = 10;
+            //     Simulator::Schedule(Seconds(delay), &BitcoinNode::AdvertiseNewTransactionInv, this, from, parsedInv, hopNumber + 1);
+            //   }
+            // }
             default:
               NS_LOG_INFO ("Default");
               break;
@@ -652,32 +642,39 @@ BitcoinNode::AdvertiseNewTransactionInv (Address from, const std::string transac
 
   uint numberHash = std::hash<std::string>()(transactionHash);
 
+  // An attacker does not relay
+  if (m_mode == SPY)
+    return;
+
   int count = 0;
 
   for (std::vector<Ipv4Address>::const_iterator i = m_peersAddresses.begin(); i != m_peersAddresses.end(); ++i, ++count)
   {
-    if (m_protocolType == FILTERS_ON_LINKS && filters[from] && (numberHash % 8) != filters[from]) {
+    if (m_protocol == FILTERS_ON_LINKS && filters[from] && (numberHash % 8) != filters[from]) {
       continue;
     }
 
-    if (blocksOnlyMode[*i]) {
+    if (peersMode[*i] == BLOCKS_ONLY) {
       continue;
     }
 
     if (*i != InetSocketAddress::ConvertFrom(from).GetIpv4())
     {
-      // std::cout << "node " << GetNode()->GetId() << " retransmit a packet " << transactionHash << " to " << *i << "\n";
       auto delay = 0;
-      if (count > 0 && count <= 8) {
-        delay = PoissonNextSend(invIntervalSeconds);
+
+      if (*i == InetSocketAddress::ConvertFrom(spy).GetIpv4()) {
+        for (int k = 0; k < m_netGroups; k++) {
+          delay = PoissonNextSendTo(invIntervalSeconds * 2, k);
+          Simulator::Schedule (Seconds(delay), &BitcoinNode::SendInvToNode, this, *i, transactionHash, hopNumber);
+        }
+      } else if (count > 0 && count <= 8) {
+        delay = PoissonNextSend(invIntervalSeconds / 2);
+        Simulator::Schedule (Seconds(delay), &BitcoinNode::SendInvToNode, this, *i, transactionHash, hopNumber);
       } else {
         auto netGroup = MurmurHash3Mixer(i->Get()) % m_netGroups;
-        delay = PoissonNextSendTo(invIntervalSeconds, netGroup);
+        delay = PoissonNextSendTo(invIntervalSeconds * 2, netGroup);
+        Simulator::Schedule (Seconds(delay), &BitcoinNode::SendInvToNode, this, *i, transactionHash, hopNumber);
       }
-      Simulator::Schedule (Seconds(delay), &BitcoinNode::SendInvToNode, this, *i, transactionHash, hopNumber);
-      // SendInvToNode(*i, inv);
-      m_nodeStats->invSentMessages += 1;
-      m_nodeStats->invSentBytes += m_bitcoinMessageHeader + m_countBytes + 1*m_inventorySizeBytes;
     }
   }
 }
@@ -708,6 +705,10 @@ BitcoinNode::SendInvToNode(Ipv4Address receiver, const std::string transactionHa
   const uint8_t delimiter[] = "#";
   m_peersSockets[receiver]->Send (reinterpret_cast<const uint8_t*>(invInfo.GetString()), invInfo.GetSize(), 0);
   m_peersSockets[receiver]->Send (delimiter, 1, 0);
+
+  m_nodeStats->invSentMessages += 1;
+  m_nodeStats->invSentBytes += m_bitcoinMessageHeader + m_countBytes + 1*m_inventorySizeBytes;
+
 }
 
 void
@@ -722,10 +723,6 @@ BitcoinNode::SendMessage(enum Messages receivedMessage,  enum Messages responseM
 
   d["message"].SetInt(responseMessage);
   d.Accept(writer);
-  NS_LOG_INFO ("Node " << GetNode ()->GetId () << " got a "
-               << getMessageName(receivedMessage) << " message"
-               << " and sent a " << getMessageName(responseMessage)
-               << " message: " << buffer.GetString());
 
   Ipv4Address outgoingIpv4Address = InetSocketAddress::ConvertFrom(outgoingAddress).GetIpv4 ();
   std::map<Ipv4Address, Ptr<Socket>>::iterator it = m_peersSockets.find(outgoingIpv4Address);

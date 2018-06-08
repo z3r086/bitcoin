@@ -113,3 +113,5 @@ contrib/devtools/split-debug.sh
 
 
 db4/*
+
+Transaction-Simulator/copy-to-ns3.sh

@@ -51,23 +51,8 @@ BitcoinTopologyHelper::BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoN
   srand (1000);
 
 
-  std::array<double,7> nodesDistributionIntervals {NORTH_AMERICA, EUROPE, SOUTH_AMERICA, ASIA_PACIFIC, JAPAN, AUSTRALIA, OTHER};
-
   if (m_systemId == 0)
     std::cout << "BITCOIN Mode selected\n";
-  std::array<double,6> nodesDistributionWeights {38.69, 51.59, 1.13, 5.74, 1.19, 1.66};
-  m_nodesDistribution = std::piecewise_constant_distribution<double> (nodesDistributionIntervals.begin(), nodesDistributionIntervals.end(), nodesDistributionWeights.begin());
-
-
-
-  std::array<double,7> connectionsDistributionIntervals {1, 5, 10, 15, 20, 30, 125};
-  for (int i = 0; i < 7; i++)
-	connectionsDistributionIntervals[i] -= i;
-
-  std::array<double,6> connectionsDistributionWeights {10, 40, 30, 13, 6, 1};
-
-  m_connectionsDistribution = std::piecewise_constant_distribution<double> (connectionsDistributionIntervals.begin(), connectionsDistributionIntervals.end(), connectionsDistributionWeights.begin());
-
 
   for (int i = 0; i < m_totalNoNodes; i++)
   {
@@ -82,11 +67,24 @@ BitcoinTopologyHelper::BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoN
       m_maxConnections[i] = m_minConnectionsPerNode;
     else
       m_maxConnections[i] = m_maxConnectionsPerNode;
+		// Simulation for poisson PR
+		if (i == 0) {
+			m_minConnections[i] = m_totalNoNodes - 1;
+			m_maxConnections[i] = m_totalNoNodes - 1;
+		}
   }
+
+	// Simulation for poisson PR
+	for (int j = 1; j < m_totalNoNodes; j++) {
+		uint32_t candidatePeer = nodes[j];
+		m_nodesConnections[0].push_back(candidatePeer);
+		m_nodesConnections[candidatePeer].push_back(0);
+	}
+
 
   for(int i = 0; i < m_totalNoNodes; i++)
   {
-	int count = 0;
+		int count = 0;
 
     while (m_nodesConnections[i].size() < m_minConnections[i] && count < 10*m_minConnections[i])
     {
@@ -151,19 +149,6 @@ BitcoinTopologyHelper::BitcoinTopologyHelper (uint32_t noCpus, uint32_t totalNoN
 	  }
     }
     std::cout << "\n" << std::endl;
-  }
-
-  //Print the nodes' connections distribution
-  if (m_systemId == 0)
-  {
-	int *stats = new int[connectionsDistributionIntervals.size()];
-	double averageNoConnectionsPerNode = 0;
-
-
-
-    std::cout << "Average Number of Connections Per Node = " << averageNoConnectionsPerNode / (m_totalNoNodes);
-
-	delete[] stats;
   }
 
   tFinish = GetWallTime();

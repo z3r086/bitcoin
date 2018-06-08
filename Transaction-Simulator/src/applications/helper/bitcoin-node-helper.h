@@ -35,9 +35,9 @@ public:
    * \param internetSpeeds a reference to a struct containing the internet speeds of the node
    * \param stats a pointer to struct holding the node statistics
    */
-  BitcoinNodeHelper (std::string protocol, Address address, std::vector<Ipv4Address> &peers,
+  BitcoinNodeHelper (std::string netProtocol, Address address, std::vector<Ipv4Address> &peers,
                      std::map<Ipv4Address, double> &peersDownloadSpeeds, std::map<Ipv4Address, double> &peersUploadSpeeds,
-                     nodeInternetSpeeds &internetSpeeds, nodeStatistics *stats, ProtocolType protocolType);
+                     nodeInternetSpeeds &internetSpeeds, nodeStatistics *stats);
 
   /**
    * Called by subclasses to set a different factory TypeId
@@ -57,9 +57,9 @@ public:
    * \param internetSpeeds a reference to a struct containing the internet speeds of the node
    * \param stats a pointer to struct holding the node statistics
    */
-   void commonConstructor(std::string protocol, Address address, std::vector<Ipv4Address> &peers,
+   void commonConstructor(std::string netProtocol, Address address, std::vector<Ipv4Address> &peers,
                           std::map<Ipv4Address, double> &peersDownloadSpeeds, std::map<Ipv4Address, double> &peersUploadSpeeds,
-                          nodeInternetSpeeds &internetSpeeds, nodeStatistics *stats, ProtocolType protocolType);
+                          nodeInternetSpeeds &internetSpeeds, nodeStatistics *stats);
 
   /**
    * Helper function used to set the underlying application attributes.
@@ -105,9 +105,7 @@ public:
   void SetNodeInternetSpeeds (nodeInternetSpeeds &internetSpeeds);
 
   void SetNodeStats (nodeStatistics *nodeStats);
-  void SetProperties (uint64_t txToCreate, bool blocksOnly, int netGroups);
-
-  void SetProtocolType (enum ProtocolType protocolType);
+  void SetProperties (uint64_t txToCreate, enum ProtocolType protocol, enum ModeType mode, int netGroups);
 
 protected:
   /**
@@ -120,7 +118,7 @@ protected:
   virtual Ptr<Application> InstallPriv (Ptr<Node> node);
 
   ObjectFactory                                       m_factory;              //!< Object factory.
-  std::string                                         m_protocol;             //!< The name of the protocol to use to receive traffic
+  std::string                                         m_netProtocol;             //!< The name of the protocol to use to receive traffic
   Address                                             m_address;              //!< The address of the bitcoin node
   std::vector<Ipv4Address>		                      m_peersAddresses;       //!< The addresses of peers
   std::map<Ipv4Address, double>                       m_peersDownloadSpeeds;  //!< The download speeds of the peers
@@ -130,8 +128,8 @@ protected:
 
   uint64_t m_txToCreate;
 
-  enum ProtocolType									  m_protocolType;         //!< The protocol that the nodes use to advertise new blocks (DEFAULT: STANDARD)
-  bool									              m_blocksOnly;
+  enum ProtocolType									  m_protocol;         //!< The protocol that the nodes use to advertise new blocks (DEFAULT: STANDARD)
+  enum ModeType									              m_mode;
   int m_netGroups;
 
 };

@@ -77,20 +77,9 @@ public:
    * \brief Set the node statistics
    * \param nodeStats a reference to a nodeStatistics struct
    */
-  void SetNodeStats (nodeStatistics *nodeStats);
+  void SetNodeStats(nodeStatistics *nodeStats);
 
-  void SetProperties (uint64_t txToCreate);
-
-
-  /**
-   * \brief Set the protocol type(default: STANDARD_PROTOCOL)
-   * \param protocolType the type of protocol used for advertising new blocks
-   */
-  void SetProtocolType (enum ProtocolType protocolType);
-
-  void SetNetGroups (int netGroups);
-
-  void SetMode (bool blocksOnly);
+  void SetProperties(uint64_t txToCreate, enum ProtocolType protocol, enum ModeType mode, int netGroups);
 
 protected:
   virtual void DoDispose (void);           // inherited from Application base class.
@@ -177,21 +166,13 @@ protected:
   double		  m_meanBlockPropagationTime;         //!< The mean time that the node has to wait in order to receive a newly mined block
   double		  m_meanBlockSize;                    //!< The mean block size
   Time            m_invTimeoutMinutes;                //!< The block timeout in minutes
-  bool            m_isMiner;                          //!< True if the node is also a miner, False otherwise
   double          m_downloadSpeed;                    //!< The download speed of the node in Bytes/s
   double          m_uploadSpeed;                      //!< The upload speed of the node in Bytes/s
   double          m_averageTransactionSize;           //!< The average transaction size. Needed for compressed blocks
-  int             m_transactionIndexSize;             //!< The transaction index size in bytes. Needed for compressed blocks
-  bool            m_blockTorrent;                     //!< True if the blockTorrent mechanism is used, False otherwise
-  uint32_t        m_chunkSize;                        //!< The size of the chunk in Bytes, when blockTorrent is used
-  bool            m_spv;                              //!< Simplified Payment Verification. Used only in conjuction with blockTorrent
   uint m_fixedTxTimeGeneration;
 
-
-  bool m_blocksOnly;
-
   std::map<Address, uint32_t> filters;
-  std::map<Address, bool> blocksOnlyMode;
+  std::map<Address, ModeType> peersMode;
 
   uint lastTxId;
   std::vector<std::string> knownTxHashes;
@@ -220,10 +201,17 @@ protected:
   std::vector<double>                                 m_sendCompressedBlockTimes;       //!< contains the times of the next sendBlock events
   std::vector<double>                                 m_receiveBlockTimes;              //!< contains the times of the next sendBlock events
   std::vector<double>                                 m_receiveCompressedBlockTimes;    //!< contains the times of the next sendBlock events
-  enum ProtocolType                                   m_protocolType;                   //!< protocol type
+  enum ProtocolType                                   m_protocol;                   //!< protocol type
+  enum ModeType                                       m_mode;
 
   int m_netGroups;
 
+  uint64_t heardTotal;
+  std::vector<int> firstTimeHops;
+  bool txCreator;
+
+
+  Address spy;
   uint64_t       m_txToCreate;
 
   const int       m_bitcoinPort;               //!< 8333
