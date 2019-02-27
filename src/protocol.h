@@ -238,6 +238,12 @@ extern const char *GETBLOCKTXN;
  * @since protocol version 70014 as described by BIP 152
  */
 extern const char *BLOCKTXN;
+
+extern const char *REQRECONCIL;
+
+extern const char *RESRECONCIL;
+
+extern const char *RECONCILDIFF;
 };
 
 /* Get a vector of all valid message types (see above) */
@@ -269,6 +275,7 @@ enum ServiceFlags : uint64_t {
     // See BIP159 for details on how this is implemented.
     NODE_NETWORK_LIMITED = (1 << 10),
 
+    NODE_RECONCILIATION = (1 << 13),
     // Bits 24-31 are reserved for temporary experiments. Just pick a bit that
     // isn't getting used, or one not being used much, and notify the
     // bitcoin-development mailing list. Remember that service bits are just

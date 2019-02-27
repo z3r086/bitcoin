@@ -77,6 +77,41 @@ private:
     const bool m_enable_bip61;
 };
 
+static CCriticalSection cs_reconciliation_queue;
+static std::vector<CNode*> m_reconciliation_queue GUARDED_BY(cs_reconciliation_queue);
+
+static CCriticalSection cs_peer_reconcil_sets;
+static std::map<CNode*, std::vector<uint64_t>> m_peer_reconcil_sets GUARDED_BY(cs_peer_reconcil_sets);
+// used for bisection
+static std::map<CNode*, std::vector<uint64_t>> m_peer_reconcil_sets_secondary GUARDED_BY(cs_peer_reconcil_sets);
+
+static CCriticalSection cs_peer_reconcil_q_history;
+static std::map<CNode*, uint64_t> m_peer_reconcil_q_history GUARDED_BY(cs_peer_reconcil_q_history);
+
+static CCriticalSection cs_peer_short_tx_map;
+static std::map<CNode*, std::map<uint64_t, CTransactionRef>> m_peer_short_tx_map GUARDED_BY(cs_peer_short_tx_map);
+
+static std::atomic<uint64_t> m_last_reconciliation{0};
+static std::map<CNode*, int> m_current_reconciliation_bisec;
+
+static CCriticalSection cs_already_asked_for;
+static std::vector<uint64_t> m_already_asked_for GUARDED_BY(cs_already_asked_for);
+
+static CCriticalSection cs_learned_from_reconcil;
+static std::vector<uint64_t> m_learned_from_reconcil GUARDED_BY(cs_learned_from_reconcil);
+
+static double prev_q{0.01};
+
+struct ReconcilRequest {
+    int64_t responseTime = -1;
+    unsigned int peerDiffs = -1;
+    unsigned int q = 0;
+    unsigned int bisection = 0;
+};
+
+
+static std::map<CNode*, ReconcilRequest> reconciliationRequests;
+
 struct CNodeStateStats {
     int nMisbehavior = 0;
     int nSyncHeight = -1;

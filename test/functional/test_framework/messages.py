@@ -49,6 +49,8 @@ NODE_BLOOM = (1 << 2)
 NODE_WITNESS = (1 << 3)
 NODE_NETWORK_LIMITED = (1 << 10)
 
+NODE_RECONCILIATION = (1 << 13)
+
 MSG_TX = 1
 MSG_BLOCK = 2
 MSG_WITNESS_FLAG = 1 << 30
@@ -93,12 +95,34 @@ def deser_string(f):
 def ser_string(s):
     return ser_compact_size(len(s)) + s
 
+def deser_int(f):
+    r = 0
+    r += struct.unpack("<I", f.read(4))[0]
+    return r
+
+def deser_uint64(f):
+    r = 0
+    for i in range(2):
+        t = struct.unpack("<I", f.read(4))[0]
+        r += t << (i * 32)
+    return r
+
 def deser_uint256(f):
     r = 0
     for i in range(8):
         t = struct.unpack("<I", f.read(4))[0]
         r += t << (i * 32)
     return r
+
+def ser_int(u):
+    return b"" + struct.pack("<I", u & 0xFFFFFFFF)
+
+def ser_uint64(u):
+    rs = b""
+    for i in range(2):
+        rs += struct.pack("<I", u & 0xFFFFFFFF)
+        u >>= 32
+    return rs
 
 
 def ser_uint256(u):
@@ -145,6 +169,14 @@ def ser_vector(l, ser_function_name=None):
             r += i.serialize()
     return r
 
+def deser_uint64_vector(f):
+    nit = deser_compact_size(f)
+    r = []
+    for i in range(nit):
+        t = deser_uint64(f)
+        r.append(t)
+    return r
+
 
 def deser_uint256_vector(f):
     nit = deser_compact_size(f)
@@ -154,6 +186,12 @@ def deser_uint256_vector(f):
         r.append(t)
     return r
 
+
+def ser_uint64_vector(l):
+    r = ser_compact_size(len(l))
+    for i in l:
+        r += ser_uint64(i)
+    return r
 
 def ser_uint256_vector(l):
     r = ser_compact_size(len(l))
@@ -1232,6 +1270,23 @@ class msg_mempool:
         return "msg_mempool()"
 
 
+class msg_notfound:
+    __slots__ = ("vec", )
+    command = b"notfound"
+
+    def __init__(self, vec=None):
+        self.vec = vec or []
+
+    def deserialize(self, f):
+        self.vec = deser_vector(f, CInv)
+
+    def serialize(self):
+        return ser_vector(self.vec)
+
+    def __repr__(self):
+        return "msg_notfound(vec=%s)" % (repr(self.vec))
+
+
 class msg_sendheaders:
     __slots__ = ()
     command = b"sendheaders"
@@ -1440,3 +1495,75 @@ class msg_witness_blocktxn(msg_blocktxn):
         r = b""
         r += self.block_transactions.serialize(with_witness=True)
         return r
+
+class msg_reqreconcil():
+    command = b"reqreconcil"
+
+    multiplier = 1000000
+    def __init__(self):
+        self.local_set_size = 0
+        self.q = 0
+        self.bisection = 0
+
+    def deserialize(self, f):
+        self.local_set_size = deser_int(f)
+        self.q = int(deser_uint64(f) / self.multiplier)
+        self.bisection = deser_int(f)
+
+    def serialize(self):
+        r = b""
+        r += ser_int(self.local_set_size)
+        r += ser_int(int(self.q * self.multiplier))
+        r += ser_int(self.bisection)
+        return r
+
+    def __repr__(self):
+        return "msg_reqreconcil(local_set_size=%s, q=%s, bisection=%s)" % (repr(self.local_set_size), self.q, self.bisection)
+
+
+class msg_resreconcil():
+    command = b"resreconcil"
+
+    def __init__(self, syndromes=None):
+        if syndromes is None:
+            self.syndromes = []
+        else:
+            self.syndromes = syndromes
+
+    def deserialize(self, f):
+        self.syndromes = deser_uint64_vector(f)
+
+    def serialize(self):
+        return ser_uint64_vector(self.syndromes)
+
+    def __repr__(self):
+        return "msg_resreconcil(syndromes=%s)" % (repr(self.syndromes))
+
+class msg_reconcildiff():
+    command = b"reconcildiff"
+
+    def __init__(self, receiver_missing_transactions=None, sender_missing_transactions=None, success = 0):
+        if receiver_missing_transactions is None:
+            self.receiver_missing_transactions = []
+        else:
+            self.receiver_missing_transactions = receiver_missing_transactions
+        if sender_missing_transactions is None:
+            self.sender_missing_transactions = []
+        else:
+            self.sender_missing_transactions = sender_missing_transactions
+        self.success = success
+
+    def deserialize(self, f):
+        self.sender_missing_transactions = deser_uint64_vector(f)
+        self.receiver_missing_transactions = deser_vector(f, CInv)
+        self.success = deser_int(f)
+
+    def serialize(self):
+        r = b""
+        r+= ser_uint64_vector(self.sender_missing_transactions)
+        r+= ser_vector(self.receiver_missing_transactions)
+        r+= ser_int(self.success)
+        return r
+
+    def __repr__(self):
+        return "msg_reconcildiff(sender_missing_transactions=%s, success=%s)" % (repr(self.sender_missing_transactions), self.success)

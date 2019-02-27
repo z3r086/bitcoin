@@ -17,11 +17,46 @@ import asyncio
 from collections import defaultdict
 from io import BytesIO
 import logging
+import socket
 import struct
 import sys
 import threading
 
-from test_framework.messages import CBlockHeader, MIN_VERSION_SUPPORTED, msg_addr, msg_block, MSG_BLOCK, msg_blocktxn, msg_cmpctblock, msg_feefilter, msg_getaddr, msg_getblocks, msg_getblocktxn, msg_getdata, msg_getheaders, msg_headers, msg_inv, msg_mempool, msg_ping, msg_pong, msg_reject, msg_sendcmpct, msg_sendheaders, msg_tx, MSG_TX, MSG_TYPE_MASK, msg_verack, msg_version, NODE_NETWORK, NODE_WITNESS, sha256
+from test_framework.messages import (
+    CBlockHeader,
+    MIN_VERSION_SUPPORTED,
+    msg_addr,
+    msg_block,
+    MSG_BLOCK,
+    msg_blocktxn,
+    msg_cmpctblock,
+    msg_feefilter,
+    msg_getaddr,
+    msg_getblocks,
+    msg_getblocktxn,
+    msg_getdata,
+    msg_getheaders,
+    msg_headers,
+    msg_inv,
+    msg_mempool,
+    msg_notfound,
+    msg_ping,
+    msg_pong,
+    msg_reject,
+    msg_sendcmpct,
+    msg_sendheaders,
+    msg_tx,
+    MSG_TX,
+    MSG_TYPE_MASK,
+    msg_verack,
+    msg_version,
+    NODE_NETWORK,
+    NODE_WITNESS,
+    sha256,
+    msg_reqreconcil,
+    msg_resreconcil,
+    msg_reconcildiff,
+)
 from test_framework.util import wait_until
 
 logger = logging.getLogger("TestFramework.mininode")
@@ -40,6 +75,7 @@ MESSAGEMAP = {
     b"headers": msg_headers,
     b"inv": msg_inv,
     b"mempool": msg_mempool,
+    b"notfound": msg_notfound,
     b"ping": msg_ping,
     b"pong": msg_pong,
     b"reject": msg_reject,
@@ -48,6 +84,9 @@ MESSAGEMAP = {
     b"tx": msg_tx,
     b"verack": msg_verack,
     b"version": msg_version,
+    b"reqreconcil": msg_reqreconcil,
+    b"resreconcil": msg_resreconcil,
+    b"reconcildiff": msg_reconcildiff,
 }
 
 MAGIC_BYTES = {
@@ -79,7 +118,7 @@ class P2PConnection(asyncio.Protocol):
     def is_connected(self):
         return self._transport is not None
 
-    def peer_connect(self, dstaddr, dstport, net="regtest"):
+    def peer_connect(self, dstaddr, dstport, net="regtest", node_outgoing=False):
         assert not self.is_connected
         self.dstaddr = dstaddr
         self.dstport = dstport
@@ -87,10 +126,29 @@ class P2PConnection(asyncio.Protocol):
         self.on_connection_send_msg = None
         self.recvbuf = b""
         self.network = net
-        logger.debug('Connecting to Bitcoin Node: %s:%d' % (self.dstaddr, self.dstport))
+        # logger.debug('Connecting to Bitcoin Node: %s:%d' % (self.dstaddr, self.dstport))
+        self.node_outgoing = node_outgoing
 
         loop = NetworkThread.network_event_loop
-        conn_gen_unsafe = loop.create_connection(lambda: self, host=self.dstaddr, port=self.dstport)
+        # conn_gen_unsafe = loop.create_connection(lambda: self, host=self.dstaddr, port=self.dstport)
+        if self.node_outgoing:
+            logger.debug('Connecting from Bitcoin Node: %s:%d' % (self.dstaddr, self.dstport))
+            listen_sock = socket.socket()
+            listen_sock.bind(('127.0.0.1', 0))
+            listen_sock.listen(1)
+            listen_port = listen_sock.getsockname()[1]
+            self.rpc.addnode('127.0.0.1:%u' % (listen_port,), 'onetry')
+            (sock, addr) = listen_sock.accept()
+            assert sock
+            listen_sock.close()
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setblocking(False)
+            conn_gen_unsafe = loop.create_connection(lambda: self, sock=sock)
+        else:
+            logger.debug('Connecting to Bitcoin Node: %s:%d' % (self.dstaddr, self.dstport))
+            conn_gen_unsafe = loop.create_connection(lambda: self, host=self.dstaddr, port=self.dstport)
+
+
         conn_gen = lambda: loop.call_soon_threadsafe(loop.create_task, conn_gen_unsafe)
         return conn_gen
 
@@ -295,11 +353,15 @@ class P2PInterface(P2PConnection):
     def on_getheaders(self, message): pass
     def on_headers(self, message): pass
     def on_mempool(self, message): pass
+    def on_notfound(self, message): pass
     def on_pong(self, message): pass
     def on_reject(self, message): pass
     def on_sendcmpct(self, message): pass
     def on_sendheaders(self, message): pass
     def on_tx(self, message): pass
+    def on_reqreconcil(self, message): pass
+    def on_resreconcil(self, message): pass
+    def on_reconcildiff(self, message): pass
 
     def on_inv(self, message):
         want = msg_getdata()

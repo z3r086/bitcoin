@@ -25,11 +25,15 @@
 #include <tinyformat.h>
 #include <txmempool.h>
 #include <ui_interface.h>
-#include <util.h>
-#include <utilmoneystr.h>
-#include <utilstrencodings.h>
+#include <util/system.h>
+#include <util/moneystr.h>
+#include <util/strencodings.h>
 
 #include <memory>
+
+#include "field_64bit.h"
+#include "sketch.h"
+
 
 #if defined(NDEBUG)
 # error "Bitcoin cannot be compiled without assertions."
@@ -64,6 +68,13 @@ static constexpr int STALE_RELAY_AGE_LIMIT = 30 * 24 * 60 * 60;
 /// limiting block relay. Set to one week, denominated in seconds.
 static constexpr int HISTORICAL_BLOCK_AGE = 7 * 24 * 60 * 60;
 
+static constexpr int MAX_SYNDROMES = 50;
+static constexpr uint64_t RECONCIL_INTERVAL = 1;
+
+static constexpr int64_t Q_MULTIPLIER = 1000000;
+
+static constexpr double DEFAULT_Q = 0.01;
+
 struct COrphanTx {
     // When modifying, adapt the copy of this definition in tests/DoS_tests.
     CTransactionRef tx;
@@ -84,7 +95,7 @@ static constexpr unsigned int AVG_LOCAL_ADDRESS_BROADCAST_INTERVAL = 24 * 60 * 6
 static const unsigned int AVG_ADDRESS_BROADCAST_INTERVAL = 30;
 /** Average delay between trickled inventory transmissions in seconds.
  *  Blocks and whitelisted receivers bypass this, outbound peers get half this delay. */
-static const unsigned int INVENTORY_BROADCAST_INTERVAL = 5;
+static const unsigned int INVENTORY_BROADCAST_INTERVAL = 2;
 /** Maximum number of inventory items to send per transmission.
  *  Limits the impact of low-fee transaction floods. */
 static constexpr unsigned int INVENTORY_BROADCAST_MAX = 7 * INVENTORY_BROADCAST_INTERVAL;
@@ -155,6 +166,7 @@ namespace {
     /** Relay map */
     typedef std::map<uint256, CTransactionRef> MapRelay;
     MapRelay mapRelay GUARDED_BY(cs_main);
+
     /** Expiration-time ordered list of (expire time, relay map entry) pairs. */
     std::deque<std::pair<int64_t, MapRelay::iterator>> vRelayExpiration GUARDED_BY(cs_main);
 
@@ -1295,6 +1307,14 @@ void static ProcessGetData(CNode* pfrom, const CChainParams& chainparams, CConnm
                     connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *txinfo.tx));
                     push = true;
                 }
+            } else {
+                  auto txinfo = mempool.info(inv.hash);
+                  if (txinfo.tx) {
+                    connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *txinfo.tx));
+                    push = true;
+                  } else {
+                    LogPrint(BCLog::NET, "After Protecting privacy - not found, not sending \n");
+                  }
             }
             if (!push) {
                 vNotFound.push_back(inv);
@@ -1569,6 +1589,193 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
     return true;
 }
 
+void static AddTransactionToReconciliationSets(CNode* pto, const CTransactionRef tx, CConnman* connman)
+{
+  LOCK(cs_peer_reconcil_sets);
+  LOCK(cs_peer_short_tx_map);
+
+  uint64_t element = tx->GetHash().GetUint64(0);
+  m_peer_reconcil_sets[pto].push_back(element);
+  m_peer_short_tx_map[pto][element] = tx;
+}
+
+
+
+int static TransactionsToReconcile(CNode* pnode)
+{
+  int result = -1;
+  LOCK(cs_reconciliation_queue);
+  LOCK(cs_peer_reconcil_sets);
+
+  if(m_reconciliation_queue.size() == 0) {
+      LogPrintf("Recon queue empty, skipping \n");
+      return -1;
+  }
+  uint64_t since_last_recon = GetTime() - m_last_reconciliation;
+
+  if (m_reconciliation_queue.front() == pnode) {
+    result = m_peer_reconcil_sets[pnode].size();
+    m_reconciliation_queue.erase(m_reconciliation_queue.begin());
+    m_reconciliation_queue.push_back(pnode);
+
+    if (since_last_recon < RECONCIL_INTERVAL) {
+      return -1;
+    }
+    m_last_reconciliation = GetTime();
+  } else {
+    if (since_last_recon > RECONCIL_INTERVAL * 3) {
+      LogPrintf("Removing disconnected peer \n");
+      m_reconciliation_queue.erase(m_reconciliation_queue.begin());
+    }
+  }
+  return result;
+}
+
+void static FetchReconciliationSummary(CNode* pnode, unsigned int hisSetSize, std::vector<uint64_t>& oddSyndromes, double q)
+{
+  LOCK(cs_peer_reconcil_sets);
+  unsigned int mySetSize = m_peer_reconcil_sets[pnode].size();
+  int minDiff = hisSetSize - mySetSize;
+
+  unsigned int estimatedDiff = fabs(minDiff) + ceil(q * std::min(mySetSize, hisSetSize)) + 1;
+//   estimatedDiff = 10;
+  LogPrintf("mine: %i, his: %i, q: %.8f, est: %i \n", mySetSize, hisSetSize, q, estimatedDiff);
+  oddSyndromes = FindOddSyndromes(m_peer_reconcil_sets[pnode], estimatedDiff);
+}
+
+// pack bisection syndromes in 1 array
+void static FetchBisection(CNode* pnode, unsigned int hisSetSize, std::vector<uint64_t>& oddSyndromes, double q)
+{
+  // simplified version: just 4x more syndromes
+  LOCK(cs_peer_reconcil_sets);
+  LOCK(cs_peer_reconcil_sets);
+  unsigned int mySetSize = m_peer_reconcil_sets_secondary[pnode].size();
+  int minDiff = hisSetSize - mySetSize;
+
+  unsigned int estimatedDiff = fabs(minDiff) + ceil(q * std::min(mySetSize, hisSetSize)) + 1;
+//   estimatedDiff = 10;
+  LogPrintf("mine: %i, his: %i, q: %.8f, est: %i \n", mySetSize, hisSetSize, q, estimatedDiff * 4);
+  oddSyndromes = FindOddSyndromes(m_peer_reconcil_sets_secondary[pnode], estimatedDiff * 4);
+  return;
+
+  // full reconciliation
+
+  // LOCK(cs_peer_reconcil_sets);
+  // std::vector<uint64_t> firstHalf;
+  // std::vector<uint64_t> firstQuarter;
+  // std::vector<uint64_t> thirdQuarter;
+  //
+  // LogPrintf("1 \n");
+  //
+  // for (auto shortTxId: m_peer_reconcil_sets_secondary[pnode]) {
+  //   if (shortTxId % 2 == 0) {
+  //     firstHalf.push_back(shortTxId);
+  //     if (shortTxId % 4 == 0) {
+  //       firstQuarter.push_back(shortTxId);
+  //     }
+  //   } else {
+  //     if (shortTxId % 4 == 3) {
+  //       thirdQuarter.push_back(shortTxId);
+  //     }
+  //   }
+  // }
+  //
+  // unsigned int mySetSize = m_peer_reconcil_sets_secondary[pnode].size();
+  // int minDiff = hisSetSize - mySetSize;
+  // unsigned int estimatedDiff = fabs(minDiff) + ceil(q * std::min(mySetSize, hisSetSize));
+  //
+  // LogPrintf("first half elements \n");
+  // for (auto el: firstHalf) {
+  //   LogPrintf("%i \n", el);
+  // }
+  //
+  //
+  // std::vector<uint64_t> firstHalfSyndromes = FindOddSyndromes(firstHalf, estimatedDiff);
+  //
+  // LogPrintf("first half \n");
+  // for (auto el: firstHalfSyndromes) {
+  //   LogPrintf("%i \n", el);
+  // }
+  //
+  //
+  // std::vector<uint64_t> firstQuarterSyndromes = FindOddSyndromes(firstQuarter, estimatedDiff);
+  // std::vector<uint64_t> thirdQuarterSyndromes = FindOddSyndromes(thirdQuarter, estimatedDiff);
+  // firstHalfSyndromes.insert(firstHalfSyndromes.end(), firstQuarterSyndromes.begin(), firstQuarterSyndromes.end());
+  //
+  //
+  // LogPrintf("first half + firstQuarter \n");
+  // for (auto el: firstHalfSyndromes) {
+  //   LogPrintf("%i \n", el);
+  // }
+  //
+  // firstHalfSyndromes.insert(firstHalfSyndromes.end(), thirdQuarterSyndromes.begin(), thirdQuarterSyndromes.end());
+  // LogPrintf("first half + firstQuarter + thirdQuarter \n");
+  // for (auto el: firstHalfSyndromes) {
+  //   LogPrintf("%i \n", el);
+  // }
+  // oddSyndromes = firstHalfSyndromes;
+  //
+  // LogPrintf("full set \n");
+  //
+  // for (auto syn: oddSyndromes) {
+  //   LogPrintf("%i \n", syn);
+  // }
+}
+
+
+void MoveToEndOfReconQueue(CNode* pnode) {
+  LOCK(cs_reconciliation_queue);
+  auto item = std::find(m_reconciliation_queue.begin(), m_reconciliation_queue.end(), pnode);
+  if (item != m_reconciliation_queue.end())
+    std::rotate(item, item + 1, m_reconciliation_queue.end());
+}
+
+void static ClearReconciliationSet(CNode* pnode, bool primary) {
+  if (primary) {
+    m_peer_reconcil_sets_secondary[pnode] = m_peer_reconcil_sets[pnode];
+    m_peer_reconcil_sets[pnode].clear();
+  } else {
+    m_peer_reconcil_sets_secondary[pnode].clear();
+  }
+}
+
+
+bool static CompareSets(const std::vector<uint64_t>& localShortIDs, const std::vector<uint64_t>& peersOddSyndromes, std::vector<uint64_t>& txsToRequest, std::vector<uint64_t>& txsToShare) {
+  LOCK(cs_peer_reconcil_sets);
+  std::vector<uint64_t> localOddSyndromes = FindOddSyndromes(localShortIDs, peersOddSyndromes.size());
+  auto diffOddSyndromes = AddSets(peersOddSyndromes, localOddSyndromes);
+  auto diffAllSyndromes = ReconstructAllSyndromes(diffOddSyndromes);
+  auto errorLocPoly = BerlekampMassey(diffAllSyndromes);
+  std::reverse(errorLocPoly.begin(), errorLocPoly.end());
+  std::vector<uint64_t> roots;
+  bool rootsFound = FindRoots(errorLocPoly, roots);
+  LogPrintf("Roots found: %i \n", rootsFound);
+  if (roots.size() < 1) {
+    rootsFound = false;
+  }
+  if (!rootsFound) {
+    return false;
+  }
+  for(auto root: roots) {
+    if (std::find(localShortIDs.begin(), localShortIDs.end(), root) != localShortIDs.end()) {
+      LogPrintf("Tx to share: %llu \n", root);
+      txsToShare.push_back(root);
+    } else {
+      LogPrintf("Tx to request: %llu \n", root);
+      txsToRequest.push_back(root);
+    }
+  }
+  return true;
+}
+
+void static FetchTxsByShortId(CNode* pnode, const std::vector<uint64_t>& shortIDs, std::vector<CTransactionRef>& transactions) {
+  LOCK(cs_peer_short_tx_map);
+  for (auto shortID: shortIDs) {
+    transactions.push_back(m_peer_short_tx_map[pnode][shortID]);
+  }
+}
+
+
 bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStream& vRecv, int64_t nTimeReceived, const CChainParams& chainparams, CConnman* connman, const std::atomic<bool>& interruptMsgProc, bool enable_bip61)
 {
     LogPrint(BCLog::NET, "received: %s (%u bytes) peer=%d\n", SanitizeString(strCommand), vRecv.size(), pfrom->GetId());
@@ -1836,7 +2043,15 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::SENDCMPCT, fAnnounceUsingCMPCTBLOCK, nCMPCTBLOCKVersion));
         }
         pfrom->fSuccessfullyConnected = true;
-        return true;
+        if (pfrom->GetServices() & NODE_RECONCILIATION) {
+            if (!pfrom->fInbound) {
+              LOCK(cs_reconciliation_queue);
+              m_reconciliation_queue.push_back(pfrom);
+              LOCK(cs_peer_reconcil_q_history);
+              // Default
+              m_peer_reconcil_q_history[pfrom] = Q_MULTIPLIER * DEFAULT_Q;
+            }
+        }
     }
 
     if (!pfrom->fSuccessfullyConnected) {
@@ -1951,11 +2166,13 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
                 return true;
 
             bool fAlreadyHave = AlreadyHave(inv);
-            LogPrint(BCLog::NET, "got inv: %s  %s peer=%d\n", inv.ToString(), fAlreadyHave ? "have" : "new", pfrom->GetId());
+            // LogPrint(BCLog::NET, "got inv: %s  %s peer=%d\n", inv.ToString(), fAlreadyHave ? "have" : "new", pfrom->GetId());
 
             if (inv.type == MSG_TX) {
                 inv.type |= nFetchFlags;
             }
+
+            LogPrint(BCLog::NET, "got inv 2: %s  %s peer=%d\n", inv.ToString(), fAlreadyHave ? "have" : "new", pfrom->GetId());
 
             if (inv.type == MSG_BLOCK) {
                 UpdateBlockAvailability(pfrom->GetId(), inv.hash);
@@ -1976,6 +2193,9 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
                     LogPrint(BCLog::NET, "transaction (%s) inv sent in violation of protocol peer=%d\n", inv.hash.ToString(), pfrom->GetId());
                 } else if (!fAlreadyHave && !fImporting && !fReindex && !IsInitialBlockDownload()) {
                     pfrom->AskFor(inv);
+                    uint64_t shortId = inv.hash.GetUint64(0);
+                    if (std::find(m_already_asked_for.begin(), m_already_asked_for.end(), shortId) == m_already_asked_for.end())
+                      m_already_asked_for.push_back(shortId);
                 }
             }
         }
@@ -2215,6 +2435,10 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
         std::list<CTransactionRef> lRemovedTxn;
 
+        if (AlreadyHave(inv)) {
+          LogPrintf("Already have: %s \n", tx.GetHash().ToString());
+        }
+
         if (!AlreadyHave(inv) &&
             AcceptToMemoryPool(mempool, state, ptx, &fMissingInputs, &lRemovedTxn, false /* bypass_limits */, 0 /* nAbsurdFee */)) {
             mempool.check(pcoinsTip.get());
@@ -2293,6 +2517,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         }
         else if (fMissingInputs)
         {
+            LogPrintf("Missing inputs\n");
             bool fRejectedParents = false; // It may be the case that the orphans parents have all been rejected
             for (const CTxIn& txin : tx.vin) {
                 if (recentRejects->contains(txin.prevout.hash)) {
@@ -2322,6 +2547,8 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
                 recentRejects->insert(tx.GetHash());
             }
         } else {
+            LogPrintf("Not Missing inputs, still else\n");
+            LogPrintf("Tx: %s \n", tx.GetHash().ToString());
             if (!tx.HasWitness() && !state.CorruptionPossible()) {
                 // Do not use rejection cache for witness transactions or
                 // witness-stripped transactions, as they can have been malleated.
@@ -2915,13 +3142,228 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
     }
 
     if (strCommand == NetMsgType::NOTFOUND) {
+        std::vector<CInv> notfound;
+        vRecv >> notfound;
+        for(auto nf: notfound) {
+          LogPrint(BCLog::NET, "Not found %s\n", nf.ToString());
+        }
         // We do not care about the NOTFOUND message, but logging an Unknown Command
         // message would be undesirable as we transmit it ourselves.
         return true;
     }
 
-    // Ignore unknown commands for extensibility
-    LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(strCommand), pfrom->GetId());
+    else if (strCommand == NetMsgType::REQRECONCIL) {
+      if (!(pfrom->GetLocalServices() & NODE_RECONCILIATION)) {
+        LogPrintf("Ignore request from not reconcil node %i\n", pfrom->GetId());
+        return true;
+      }
+      unsigned int peerDiffs = 0;
+      vRecv >> peerDiffs;
+      LogPrintf("peer diffs: %i \n", peerDiffs);
+      unsigned int q = 0;
+      vRecv >> q;
+      LogPrintf("q: %.8f \n", q * 1.0 / Q_MULTIPLIER);
+      unsigned int bisection = 0;
+      vRecv >> bisection;
+      if (bisection == 1) {
+        std::vector<uint64_t> oddSyndromes;
+        FetchBisection(pfrom, peerDiffs, oddSyndromes, q * 1.0 / Q_MULTIPLIER);
+        connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::RESRECONCIL, oddSyndromes));
+      } else {
+        int64_t nNow = GetTimeMicros();
+        // LogPrintf("1");
+        int64_t delay = PoissonNextSend(nNow, 3);
+        // LogPrintf("2");
+        ReconcilRequest reconRequest;
+        // LogPrintf("3");
+        reconRequest.peerDiffs = peerDiffs;
+        // LogPrintf("4");
+        reconRequest.q = q;
+        // LogPrintf("5");
+        reconRequest.bisection = bisection;
+        // LogPrintf("6");
+        reconRequest.responseTime = delay;
+        // LogPrintf("7");
+        reconciliationRequests[pfrom] = reconRequest;
+        // LogPrintf("8");
+      }
+    }
+
+    else if (strCommand == NetMsgType::RESRECONCIL) {
+      LOCK(cs_main);
+      std::vector<uint64_t> peersOddSyndromes;
+      vRecv >> peersOddSyndromes;
+      std::vector<uint64_t> shortTxToRequest;
+      std::vector<uint64_t> shortTxToShare;
+      std::vector<CTransactionRef> txToShare;
+      std::vector<CInv> invToShare;
+
+      uint32_t nFetchFlags = GetFetchFlags(pfrom);
+
+
+      // no bisection, just first call responded
+      if (m_current_reconciliation_bisec[pfrom] == 0) {
+        bool diffFound = CompareSets(m_peer_reconcil_sets[pfrom], peersOddSyndromes, shortTxToRequest, shortTxToShare);
+        LogPrintf("Compared sets success: %i \n", diffFound);
+        if (diffFound) {
+          FetchTxsByShortId(pfrom, shortTxToShare, txToShare);
+          bool fPeerWantsWitness = State(pfrom->GetId())->fWantsCmpctWitness;
+          int nSendFlags = fPeerWantsWitness ? 0 : SERIALIZE_TRANSACTION_NO_WITNESS;
+          for (auto tx: txToShare) {
+            invToShare.push_back(CInv(MSG_TX, tx->GetHash()));
+          }
+
+          for (std::vector<uint64_t>::iterator txToRequest = shortTxToRequest.begin(); txToRequest != shortTxToRequest.end();) {
+            auto it = std::find(m_already_asked_for.begin(), m_already_asked_for.end(), *txToRequest);
+            if (it == m_already_asked_for.end()) {
+              m_already_asked_for.push_back(*txToRequest);
+              m_learned_from_reconcil.push_back(*txToRequest);
+              ++txToRequest;
+            } else {
+              txToRequest = shortTxToRequest.erase(txToRequest);
+            }
+          }
+          int totalDiff = shortTxToRequest.size() + txToShare.size();
+          int mySet = m_peer_reconcil_sets[pfrom].size();
+          int hisSet = mySet - txToShare.size() + shortTxToRequest.size();
+          int diffsets = std::abs(mySet - hisSet);
+          int minsets = std::min(mySet, hisSet);
+          int first = totalDiff - diffsets;
+          if (minsets != 0) {
+            double new_q = first / minsets;
+            prev_q = new_q;
+          }
+          connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF, shortTxToRequest, invToShare, 1));
+          m_current_reconciliation_bisec[pfrom] = 0;
+          m_peer_reconcil_sets[pfrom].clear();
+        } else {
+          // Protocol to call for bisection
+          LogPrintf("Failed to find diff, requesting bisection \n");
+          LOCK(cs_peer_reconcil_q_history);
+            unsigned int q = int(prev_q*Q_MULTIPLIER);
+            connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::REQRECONCIL, int(m_peer_reconcil_sets[pfrom].size()),
+              q, 1));
+            m_current_reconciliation_bisec[pfrom] = 1;
+            prev_q = DEFAULT_Q;
+          }
+        } else { // Bisection responded
+          bool diffFound = CompareSets(m_peer_reconcil_sets[pfrom], peersOddSyndromes, shortTxToRequest, shortTxToShare);
+          // bisection success
+          if (diffFound) {
+            FetchTxsByShortId(pfrom, shortTxToShare, txToShare);
+            bool fPeerWantsWitness = State(pfrom->GetId())->fWantsCmpctWitness;
+            int nSendFlags = fPeerWantsWitness ? 0 : SERIALIZE_TRANSACTION_NO_WITNESS;
+            for (auto tx: txToShare) {
+              // connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *tx));
+              invToShare.push_back(CInv(MSG_TX, tx->GetHash()));
+            }
+
+            for (std::vector<uint64_t>::iterator txToRequest = shortTxToRequest.begin(); txToRequest != shortTxToRequest.end();) {
+              auto it = std::find(m_already_asked_for.begin(), m_already_asked_for.end(), *txToRequest);
+              if (it == m_already_asked_for.end()) {
+                m_already_asked_for.push_back(*txToRequest);
+                m_learned_from_reconcil.push_back(*txToRequest);
+                ++txToRequest;
+              } else {
+                txToRequest = shortTxToRequest.erase(txToRequest);
+              }
+            }
+            // LogPrintf("1");
+            int totalDiff = shortTxToRequest.size() + txToShare.size();
+            // LogPrintf("2");
+            int mySet = m_peer_reconcil_sets[pfrom].size();
+            // LogPrintf("3");
+            int hisSet = mySet - txToShare.size() + shortTxToRequest.size();
+            // LogPrintf("4");
+            int diffsets = std::abs(mySet - hisSet);
+            int minsets = std::min(mySet, hisSet);
+            int first = totalDiff - diffsets;
+            if (minsets != 0) {
+              double new_q = first / minsets;
+              prev_q = new_q;
+            }
+            connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF, shortTxToRequest, invToShare, 1));
+          }
+          else { // fallback
+            LogPrintf("Failed to find diff, fallback \n");
+            LOCK(cs_peer_reconcil_q_history);
+            FetchTxsByShortId(pfrom, m_peer_reconcil_sets[pfrom], txToShare);
+            bool fPeerWantsWitness = State(pfrom->GetId())->fWantsCmpctWitness;
+            int nSendFlags = fPeerWantsWitness ? 0 : SERIALIZE_TRANSACTION_NO_WITNESS;
+            for (auto tx: txToShare) {
+              invToShare.push_back(CInv(MSG_TX, tx->GetHash()));
+            }
+            connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF, shortTxToRequest, invToShare, 0));
+          }
+          m_current_reconciliation_bisec[pfrom] = 0;
+          m_peer_reconcil_sets[pfrom].clear();
+          prev_q = DEFAULT_Q;
+        }
+      }
+
+    else if (strCommand == NetMsgType::RECONCILDIFF) {
+      LOCK(cs_main);
+      std::vector<uint64_t> senderMissing;
+      std::vector<CInv> receiverMissing;
+      // if fallback, this is false
+      bool reconcilSuccess = false;
+      vRecv >> senderMissing;
+      vRecv >> receiverMissing;
+      vRecv >> reconcilSuccess;
+      std::vector<CTransactionRef> txToShare;
+      std::vector<CTransactionRef> txsToRequest;
+      bool fPeerWantsWitness = State(pfrom->GetId())->fWantsCmpctWitness;
+      int nSendFlags = fPeerWantsWitness ? 0 : SERIALIZE_TRANSACTION_NO_WITNESS;
+      if (reconcilSuccess) {
+        FetchTxsByShortId(pfrom, senderMissing, txToShare);
+      } else {
+        FetchTxsByShortId(pfrom, m_peer_reconcil_sets_secondary[pfrom], txToShare);
+      }
+
+      std::vector<CInv> invToShare;
+      for (auto tx: txToShare) {
+        if (tx) {
+          // TODO gleb: try commenting this out
+        //   if (reconcilSuccess)
+        //     connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *tx));
+        //   else {
+            invToShare.push_back(CInv(MSG_TX, tx->GetHash()));
+            if (invToShare.size() == MAX_INV_SZ) {
+              connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::INV, invToShare));
+              invToShare.clear();
+            }
+        //   }
+        }
+      }
+
+      if (!invToShare.empty()) {
+        connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::INV, invToShare));
+      }
+      LogPrintf("3 \n");
+
+
+      for (auto it = receiverMissing.begin(); it != receiverMissing.end();) {
+        auto shortId = (*it).hash.GetUint64(0);
+        bool found = std::find(m_already_asked_for.begin(), m_already_asked_for.end(), shortId) != m_already_asked_for.end();
+        if (AlreadyHave(*it) || found){ //|| mapAlreadyAskedFor.find(it->hash) != mapAlreadyAskedFor.end()) {
+          it = receiverMissing.erase(it);
+        } else {
+          it++;
+          m_already_asked_for.push_back(shortId);
+          m_learned_from_reconcil.push_back(shortId);
+        }
+      }
+
+      if (receiverMissing.size() != 0)
+        connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETDATA, receiverMissing));
+      ClearReconciliationSet(pfrom, false);
+      m_current_reconciliation_bisec[pfrom] = 0;
+    }
+    else {
+        // Ignore unknown commands for extensibility
+        LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(strCommand), pfrom->GetId());
+    }
+
     return true;
 }
 
@@ -2956,6 +3398,7 @@ static bool SendRejectsAndCheckIfBanned(CNode* pnode, CConnman* connman, bool en
     }
     return false;
 }
+
 
 bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& interruptMsgProc)
 {
@@ -3286,6 +3729,21 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
             pto->nNextLocalAddrSend = PoissonNextSend(nNow, AVG_LOCAL_ADDRESS_BROADCAST_INTERVAL);
         }
 
+        ReconcilRequest reconRequest = reconciliationRequests[pto];
+        if (reconRequest.responseTime > nNow) {
+          int bisection = reconRequest.bisection;
+          int peerDiffs = reconRequest.peerDiffs;
+          double q = reconRequest.q;
+          std::vector<uint64_t> oddSyndromes;
+          LogPrintf("Fetching: %i \n", bisection);
+          // Regular reconciliation
+          FetchReconciliationSummary(pto, peerDiffs, oddSyndromes, q * 1.0 / Q_MULTIPLIER);
+          connman->PushMessage(pto, msgMaker.Make(NetMsgType::RESRECONCIL, oddSyndromes));
+          ClearReconciliationSet(pto, true);
+          reconciliationRequests[pto].responseTime = -1;
+        }
+
+
         //
         // Message: addr
         //
@@ -3509,11 +3967,15 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
             bool fSendTrickle = pto->fWhitelisted;
             if (pto->nNextInvSend < nNow) {
                 fSendTrickle = true;
+                int interval = 5;
+                if (pto->GetServices() & NODE_RECONCILIATION) {
+                  interval = 2;
+                }
                 if (pto->fInbound) {
-                    pto->nNextInvSend = connman->PoissonNextSendInbound(nNow, INVENTORY_BROADCAST_INTERVAL);
+                    pto->nNextInvSend = connman->PoissonNextSendInbound(nNow, interval);
                 } else {
                     // Use half the delay for outbound peers, as there is less privacy concern for them.
-                    pto->nNextInvSend = PoissonNextSend(nNow, INVENTORY_BROADCAST_INTERVAL >> 1);
+                    pto->nNextInvSend = PoissonNextSend(nNow, interval >> 1);
                 }
             }
 
@@ -3556,6 +4018,9 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
                 pto->timeLastMempoolReq = GetTime();
             }
 
+            if (pto->GetServices() & NODE_RECONCILIATION && pto->fInbound) {
+              fSendTrickle = true;
+            }
             // Determine transactions to relay
             if (fSendTrickle) {
                 // Produce a vector with all candidates for sending
@@ -3597,34 +4062,46 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
                     if (filterrate && txinfo.feeRate.GetFeePerK() < filterrate) {
                         continue;
                     }
-                    if (pto->pfilter && !pto->pfilter->IsRelevantAndUpdate(*txinfo.tx)) continue;
                     // Send
-                    vInv.push_back(CInv(MSG_TX, hash));
-                    nRelayedTransactions++;
-                    {
-                        // Expire old relay messages
-                        while (!vRelayExpiration.empty() && vRelayExpiration.front().first < nNow)
-                        {
-                            mapRelay.erase(vRelayExpiration.front().second);
-                            vRelayExpiration.pop_front();
-                        }
+                    // either non-recon peer or just out peer
+                    uint64_t shortID = hash.GetUint64(0);
+                    bool learned_from_reconcil = std::find(m_learned_from_reconcil.begin(), m_learned_from_reconcil.end(), shortID) != m_learned_from_reconcil.end();
+                    // TODO Gleb: cheating.
+                    bool privatePeer = m_peer_reconcil_sets.size() <= 30;
+                    if (!(pto->GetServices() & NODE_RECONCILIATION) || (!pto->fInbound && fSendTrickle && !learned_from_reconcil && !privatePeer)) {
+                      if (pto->pfilter && !pto->pfilter->IsRelevantAndUpdate(*txinfo.tx)) continue;
+                      // LogPrintf("outbound: %i, learned_from_reconcil: %i, peers: %i \n", !pto->fInbound, learned_from_reconcil, m_peer_reconcil_sets.size());
+                      // LogPrintf("Learned from reconcil: %i txs\n", m_learned_from_reconcil.size());
+                      vInv.push_back(CInv(MSG_TX, hash));
+                      nRelayedTransactions++;
+                      {
+                          // Expire old relay messages
+                          while (!vRelayExpiration.empty() && vRelayExpiration.front().first < nNow)
+                          {
+                              mapRelay.erase(vRelayExpiration.front().second);
+                              vRelayExpiration.pop_front();
+                          }
 
-                        auto ret = mapRelay.insert(std::make_pair(hash, std::move(txinfo.tx)));
-                        if (ret.second) {
-                            vRelayExpiration.push_back(std::make_pair(nNow + 15 * 60 * 1000000, ret.first));
+                          auto ret = mapRelay.insert(std::make_pair(hash, std::move(txinfo.tx)));
+                          if (ret.second) {
+                              vRelayExpiration.push_back(std::make_pair(nNow + 15 * 60 * 1000000, ret.first));
+                          }
+                      }
+                      if (vInv.size() == MAX_INV_SZ) {
+                          connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
+                          vInv.clear();
                         }
                     }
-                    if (vInv.size() == MAX_INV_SZ) {
-                        connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
-                        vInv.clear();
+                    else {
+                      AddTransactionToReconciliationSets(pto, txinfo.tx, connman);
                     }
                     pto->filterInventoryKnown.insert(hash);
                 }
+                if (!vInv.empty()) {
+                    connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
+                }
             }
         }
-        if (!vInv.empty())
-            connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
-
         // Detect whether we're stalling
         nNow = GetTimeMicros();
         if (state.nStallingSince && state.nStallingSince < nNow - 1000000 * BLOCK_STALLING_TIMEOUT) {
@@ -3759,6 +4236,21 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
                      (currentFilter < 3 * pto->lastSentFeeFilter / 4 || currentFilter > 4 * pto->lastSentFeeFilter / 3)) {
                 pto->nextSendTimeFeeFilter = timeNow + GetRandInt(MAX_FEEFILTER_CHANGE_DELAY) * 1000000;
             }
+        }
+
+        //
+        // Message: request reconciliation
+        //
+        if (pto->GetLocalServices() & NODE_RECONCILIATION) {
+          // -1 is returned if should not reconcil
+          int transactions_to_reconcile = TransactionsToReconcile(pto);
+          if (transactions_to_reconcile >= 0) {
+              LOCK(cs_peer_reconcil_q_history);
+              unsigned int q = int(prev_q*Q_MULTIPLIER);
+              connman->PushMessage(pto, msgMaker.Make(NetMsgType::REQRECONCIL, transactions_to_reconcile,
+                q, 0));
+              m_current_reconciliation_bisec[pto] = 0;
+          }
         }
     }
     return true;
