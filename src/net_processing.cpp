@@ -1774,7 +1774,7 @@ void static FetchTxsByShortId(CNode* pnode, const std::vector<uint64_t>& shortID
 }
 
 
-static int64_t m_next_send_recres_to_incoming = 0; 
+static int64_t m_next_send_recres_to_incoming = 0;
 
 static int64_t PoissonNextSendInboundReconcilResponse(int64_t now, int average_interval_seconds)
 {
