@@ -70,6 +70,8 @@ public:
     /** If we have extra outbound peers, try to disconnect the one with the oldest block announcement */
     void EvictExtraOutboundPeers(int64_t time_in_seconds) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
+    int64_t PoissonNextSendInboundReconcilResponse(int64_t now, int average_interval_seconds);
+
 private:
     int64_t m_stale_tip_check_time; //!< Next time to check for stale tip
 

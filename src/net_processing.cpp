@@ -1608,7 +1608,6 @@ int static TransactionsToReconcile(CNode* pnode)
   LOCK(cs_peer_reconcil_sets);
 
   if(m_reconciliation_queue.size() == 0) {
-      LogPrintf("Recon queue empty, skipping \n");
       return -1;
   }
   uint64_t since_last_recon = GetTime() - m_last_reconciliation;
@@ -1647,7 +1646,6 @@ void static FetchReconciliationSummary(CNode* pnode, unsigned int hisSetSize, st
 void static FetchBisection(CNode* pnode, unsigned int hisSetSize, std::vector<uint64_t>& oddSyndromes, double q)
 {
   // simplified version: just 4x more syndromes
-  LOCK(cs_peer_reconcil_sets);
   LOCK(cs_peer_reconcil_sets);
   unsigned int mySetSize = m_peer_reconcil_sets_secondary[pnode].size();
   int minDiff = hisSetSize - mySetSize;
@@ -1773,6 +1771,20 @@ void static FetchTxsByShortId(CNode* pnode, const std::vector<uint64_t>& shortID
   for (auto shortID: shortIDs) {
     transactions.push_back(m_peer_short_tx_map[pnode][shortID]);
   }
+}
+
+
+static int64_t m_next_send_recres_to_incoming = 0; 
+
+static int64_t PoissonNextSendInboundReconcilResponse(int64_t now, int average_interval_seconds)
+{
+    if (m_next_send_recres_to_incoming < now) {
+        // If this function were called from multiple threads simultaneously
+        // it would possible that both update the next send variable, and return a different result to their caller.
+        // This is not possible in practice as only the net processing thread invokes this function.
+        m_next_send_recres_to_incoming = PoissonNextSend(now, average_interval_seconds);
+    }
+    return m_next_send_recres_to_incoming;
 }
 
 
@@ -3172,7 +3184,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
       } else {
         int64_t nNow = GetTimeMicros();
         // LogPrintf("1");
-        int64_t delay = PoissonNextSend(nNow, 3);
+        int64_t delay = PoissonNextSendInboundReconcilResponse(nNow, 1);
         // LogPrintf("2");
         ReconcilRequest reconRequest;
         // LogPrintf("3");

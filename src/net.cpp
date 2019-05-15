@@ -2891,6 +2891,21 @@ int64_t CConnman::PoissonNextSendInbound(int64_t now, int average_interval_secon
     return m_next_send_inv_to_incoming;
 }
 
+int64_t m_next_send_recres_to_incoming;
+
+int64_t PoissonNextSendInboundReconcilResponse(int64_t now, int average_interval_seconds)
+{
+    if (m_next_send_recres_to_incoming < now) {
+        // If this function were called from multiple threads simultaneously
+        // it would possible that both update the next send variable, and return a different result to their caller.
+        // This is not possible in practice as only the net processing thread invokes this function.
+        m_next_send_recres_to_incoming = PoissonNextSend(now, average_interval_seconds);
+    }
+    return m_next_send_recres_to_incoming;
+}
+
+
+
 int64_t PoissonNextSend(int64_t now, int average_interval_seconds)
 {
     return now + (int64_t)(log1p(GetRand(1ULL << 48) * -0.0000000000000035527136788 /* -1/2^48 */) * average_interval_seconds * -1000000.0 + 0.5);
