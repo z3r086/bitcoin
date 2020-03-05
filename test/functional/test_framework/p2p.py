@@ -60,6 +60,11 @@ from test_framework.messages import (
     msg_pong,
     msg_sendaddrv2,
     msg_sendcmpct,
+    msg_sendrecon,
+    msg_reqrecon,
+    msg_sketch,
+    msg_reqbisec,
+    msg_reconcildiff,
     msg_sendheaders,
     msg_tx,
     MSG_TX,
@@ -108,6 +113,11 @@ MESSAGEMAP = {
     b"verack": msg_verack,
     b"version": msg_version,
     b"wtxidrelay": msg_wtxidrelay,
+    b"sendrecon": msg_sendrecon,
+    b"reqrecon": msg_reqrecon,
+    b"sketch": msg_sketch,
+    b"reqbisec": msg_reqbisec,
+    b"reconcildiff": msg_reconcildiff,
 }
 
 MAGIC_BYTES = {
@@ -395,6 +405,7 @@ class P2PInterface(P2PConnection):
     def on_sendcmpct(self, message): pass
     def on_sendheaders(self, message): pass
     def on_tx(self, message): pass
+    def on_sendrecon(self, message): pass
     def on_wtxidrelay(self, message): pass
 
     def on_inv(self, message):
