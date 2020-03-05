@@ -277,6 +277,7 @@ public:
         if (phase == RECON_EXT_REQUESTED) {
             m_capacity_snapshot = remote_sketch_capacity;
             m_remote_sketch_snapshot = remote_sketch;
+            m_local_set_snapshot = m_local_set;
             m_local_set.clear();
         }
     }
@@ -297,7 +298,7 @@ public:
     std::vector<uint256> AddToReconSet(std::vector<uint256> txs_to_reconcile, uint32_t limit)
     {
         std::vector<uint256> remaining_txs;
-        uint32_t recon_set_overflow = m_local_set.size() + txs_to_reconcile.size() - limit;
+        int32_t recon_set_overflow = m_local_set.size() + txs_to_reconcile.size() - limit;
         if (recon_set_overflow > 0) {
             remaining_txs = std::vector<uint256>(txs_to_reconcile.end() - recon_set_overflow, txs_to_reconcile.end());
             txs_to_reconcile.resize(txs_to_reconcile.size() - recon_set_overflow);

@@ -4285,8 +4285,8 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
                 LogPrint(BCLog::NET, "Outgoing reconciliation with peer=%I failed after extension \n", pfrom.GetId());
                 m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF, false, std::vector<uint32_t>()));
-                peer->m_recon_state->FinalizeReconciliation(false, Q_SET_DEFAULT, 0, 0);
                 AnnounceTxs(peer->m_recon_state->GetLocalSet(true), pfrom);
+                peer->m_recon_state->FinalizeReconciliation(false, Q_SET_DEFAULT, 0, 0);
             }
         }
         return;
@@ -5142,7 +5142,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                         uint16_t sketch_capacity = peer->m_recon_state->EstimateSketchCapacity();
                         sketch = peer->m_recon_state->ComputeSketch(sketch_capacity);
                         peer->m_recon_state->UpdateIncomingPhase(RECON_INIT_RESPONDED, sketch_capacity);
-                        response_skdata = sketch.Serialize();
+                        if (sketch) response_skdata = sketch.Serialize();
                     } else {
                         sketch = peer->m_recon_state->ComputeExtendedSketch();
                         peer->m_recon_state->UpdateIncomingPhase(RECON_EXT_RESPONDED);
