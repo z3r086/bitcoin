@@ -160,6 +160,13 @@ private:
      * peers chosen for reconciliation.
      */
     std::deque<CNode*> m_recon_queue;
+
+    /**
+     * Reconciliations are requested periodically:
+     * every RECON_REQUEST_INTERVAL seconds we pick a peer from the queue.
+     */
+    std::chrono::microseconds m_next_recon_request{0};
+    void UpdateNextReconRequest(std::chrono::microseconds now);
 };
 
 struct CNodeStateStats {

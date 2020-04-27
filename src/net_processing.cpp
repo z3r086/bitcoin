@@ -148,6 +148,8 @@ static constexpr uint32_t MAX_GETCFHEADERS_SIZE = 2000;
 static constexpr size_t MAX_PCT_ADDR_TO_SEND = 23;
 /** Static component of the salt used to compute short txids for transaction reconciliation. */
 static const std::string RECON_STATIC_SALT = "Tx Relay Salting";
+/** Used to convert a floating point reconciliation coefficient q to an int for transmission. */
+static constexpr double Q_PRECISION{2 << 12};
 /** Default coefficient used to estimate set difference for tx reconciliation. */
 static constexpr double DEFAULT_RECON_Q = 0.02;
 /**
@@ -166,6 +168,14 @@ static constexpr uint32_t MAX_OUTBOUND_FLOOD_TO = 8;
   * - reconciliation short-full id mapping
   */
 static const unsigned int MAX_RECON_SET = 10000;
+/**
+ * Interval between sending reconciliation request to the same peer.
+ * This value allows to reconcile ~100 transactions (7 tx/s * 16s) during normal system operation at capacity.
+ * More frequent reconciliations would cause significant constant bandwidth overhead due to
+ * reconciliation metadata (sketch sizes etc.), which would nullify the efficiency.
+ * Less frequent reconciliations would introduce high transaction relay latency.
+ */
+static constexpr std::chrono::microseconds RECON_REQUEST_INTERVAL{std::chrono::seconds{16}};
 
 struct COrphanTx {
     // When modifying, adapt the copy of this definition in tests/DoS_tests.
@@ -542,6 +552,19 @@ struct Peer {
          * this set with a similar set on the other side of the connection.
          */
         std::set<uint256> m_local_set;
+
+        /*
+        * Used to keep track of the current reconciliation round with a peer.
+        * Used for both inbound (responded) and outgoing (requested/initiated) reconciliations.
+        */
+        enum ReconPhase {
+            NONE,
+            INIT_REQUESTED,
+            INIT_RESPONDED,
+            BISEC_REQUESTED,
+            BISEC_RESPONDED,
+        };
+        ReconPhase m_outgoing_recon{ReconPhase::NONE};
     };
 
     /// nullptr if we're not reconciling (neither passively nor actively) with this peer.
@@ -876,6 +899,11 @@ size_t PeerManager::GetTxRelayOutboundCountByRelayType(bool flooding) const
         }
     });
     return result;
+}
+
+void PeerManager::UpdateNextReconRequest(std::chrono::microseconds now)
+{
+    m_next_recon_request = now + RECON_REQUEST_INTERVAL / m_recon_queue.size();
 }
 
 void PeerManager::AddTxAnnouncement(const CNode& node, const GenTxid& gtxid, std::chrono::microseconds current_time)
@@ -4698,6 +4726,29 @@ bool PeerManager::SendMessages(CNode* pto)
         }
         if (!vInv.empty())
             m_connman.PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
+        //
+        // Message: reconciliation request
+        //
+        if (m_recon_queue.size() > 0) {
+            // Request transaction reconciliation periodically to efficiently exchange transactions.
+            // To make reconciliation predictable and efficient, we reconcile with peers in order based on the queue,
+            // and with a delay between requests.
+            if (m_next_recon_request < current_time && m_recon_queue.back() == pto) {
+                assert(peer->m_recon_state->m_responder); // Should not be in the queue otherwise
+                if (peer->m_recon_state->m_outgoing_recon != Peer::ReconState::ReconPhase::NONE) {
+                    // Do not initiate a new reconciliation if the old one is still in progress
+                    LogPrint(BCLog::NET, "Previous reconciliation with peer=%d is still ongoing, not initiating a new one\n", pto->GetId());
+                } else {
+                    uint16_t local_recon_set_size = peer->m_recon_state->m_local_set.size();
+                    uint16_t q(peer->m_recon_state->m_local_q * Q_PRECISION);
+                    m_connman.PushMessage(pto, msgMaker.Make(NetMsgType::REQRECON, local_recon_set_size, q));
+                    peer->m_recon_state->m_outgoing_recon = Peer::ReconState::ReconPhase::INIT_REQUESTED;
+                }
+                UpdateNextReconRequest(current_time);
+                m_recon_queue.pop_back();
+                m_recon_queue.push_front(pto);
+            }
+        }
 
         // Detect whether we're stalling
         current_time = GetTime<std::chrono::microseconds>();
