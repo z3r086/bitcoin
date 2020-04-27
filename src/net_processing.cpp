@@ -176,6 +176,12 @@ static const unsigned int MAX_RECON_SET = 10000;
  * Less frequent reconciliations would introduce high transaction relay latency.
  */
 static constexpr std::chrono::microseconds RECON_REQUEST_INTERVAL{std::chrono::seconds{16}};
+/**
+ * Interval between responding to peers' reconciliation requests.
+ * We don't respond to reconciliation requests right away because that would enable monitoring
+ * when we receive transactions (privacy leak).
+ */
+static constexpr std::chrono::microseconds RECON_RESPONSE_INTERVAL{std::chrono::seconds{2}};
 
 struct COrphanTx {
     // When modifying, adapt the copy of this definition in tests/DoS_tests.
@@ -553,6 +559,26 @@ struct Peer {
          */
         std::set<uint256> m_local_set;
 
+        /**
+         * A reconciliation request comes from a peer with a reconciliation set size from their side,
+         * which is supposed to help us to estimate set difference size. The value is stored here until
+         * we respond to that request with a sketch.
+         */
+        uint16_t m_remote_set_size;
+
+        /**
+         * The use of q coefficients is described above (see local_q comment).
+         * The value transmitted from the peer with a reconciliation requests is stored here until
+         * we respond to that request with a sketch.
+         */
+        double m_remote_q;
+
+        /**
+         * When a reconciliation request is received, instead of responding to it right away,
+         * we schedule a response for later, so that a spy can't monitor our reconciliation sets.
+         */
+        std::chrono::microseconds m_next_recon_respond{0};
+
         /*
         * Used to keep track of the current reconciliation round with a peer.
         * Used for both inbound (responded) and outgoing (requested/initiated) reconciliations.
@@ -565,6 +591,7 @@ struct Peer {
             BISEC_RESPONDED,
         };
         ReconPhase m_outgoing_recon{ReconPhase::NONE};
+        ReconPhase m_incoming_recon{ReconPhase::NONE};
     };
 
     /// nullptr if we're not reconciling (neither passively nor actively) with this peer.
@@ -904,6 +931,14 @@ size_t PeerManager::GetTxRelayOutboundCountByRelayType(bool flooding) const
 void PeerManager::UpdateNextReconRequest(std::chrono::microseconds now)
 {
     m_next_recon_request = now + RECON_REQUEST_INTERVAL / m_recon_queue.size();
+}
+
+std::chrono::microseconds PeerManager::NextReconRespond(std::chrono::microseconds now)
+{
+    if (m_next_recon_respond < now) {
+        m_next_recon_respond = now + RECON_RESPONSE_INTERVAL;
+    }
+    return m_next_recon_respond;
 }
 
 void PeerManager::AddTxAnnouncement(const CNode& node, const GenTxid& gtxid, std::chrono::microseconds current_time)
@@ -3997,6 +4032,22 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         return;
     }
 
+    std::chrono::microseconds current_time = GetTime<std::chrono::microseconds>();
+
+    // Record an (expected) reconciliation request with parameters to respond when time comes.
+    // All initial reconciliation responses will be done at the same time to prevent tx-related privacy leaks.
+    if (msg_type == NetMsgType::REQRECON) {
+        if (peer->m_recon_state == nullptr) return;
+        if (!peer->m_recon_state->m_sender) return;
+        if (peer->m_recon_state->m_incoming_recon != Peer::ReconState::ReconPhase::NONE) return;
+        uint16_t peer_recon_set_size, peer_q;
+        vRecv >> peer_recon_set_size >> peer_q;
+        peer->m_recon_state->m_incoming_recon = Peer::ReconState::ReconPhase::INIT_REQUESTED;
+        peer->m_recon_state->m_remote_set_size = peer_recon_set_size;
+        peer->m_recon_state->m_remote_q = double(peer_q / Q_PRECISION);
+        peer->m_recon_state->m_next_recon_respond = NextReconRespond(current_time);
+        return;
+    }
     // Ignore unknown commands for extensibility
     LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
     return;

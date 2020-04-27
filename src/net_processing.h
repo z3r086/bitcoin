@@ -167,6 +167,13 @@ private:
      */
     std::chrono::microseconds m_next_recon_request{0};
     void UpdateNextReconRequest(std::chrono::microseconds now);
+
+    /**
+     * Used to schedule the next initial response for any pending reconciliation request.
+     * Respond to all requests at the same time to prevent transaction possession leak.
+     */
+    std::chrono::microseconds m_next_recon_respond{0};
+    std::chrono::microseconds NextReconRespond(std::chrono::microseconds now);
 };
 
 struct CNodeStateStats {
