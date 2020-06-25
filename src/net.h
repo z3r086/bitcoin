@@ -151,6 +151,7 @@ public:
         std::vector<std::string> m_specified_outgoing;
         std::vector<std::string> m_added_nodes;
         std::vector<bool> m_asmap;
+        std::vector<std::string> m_banned_asns;
     };
 
     void Init(const Options& connOptions) {

@@ -430,6 +430,7 @@ void SetupServerArgs(NodeContext& node)
 
     gArgs.AddArg("-addnode=<ip>", "Add a node to connect to and attempt to keep the connection open (see the `addnode` RPC command help for more info). This option can be specified multiple times to add multiple nodes.", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     gArgs.AddArg("-asmap=<file>", strprintf("Specify asn mapping used for bucketing of the peers (default: %s). Relative paths will be prefixed by the net-specific datadir location.", DEFAULT_ASMAP_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    gArgs.AddArg("-asban=<asn>", strprintf("Ban the nodes mapped to the specified ASN (as per asmap) specified as %s. This option can be specified multiple times. Does not apply to nodes specified by -connect or -addnode.", "AS0000"), ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     gArgs.AddArg("-banscore=<n>", strprintf("Threshold for disconnecting misbehaving peers (default: %u)", DEFAULT_BANSCORE_THRESHOLD), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     gArgs.AddArg("-bantime=<n>", strprintf("Number of seconds to keep misbehaving peers from reconnecting (default: %u)", DEFAULT_MISBEHAVING_BANTIME), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     gArgs.AddArg("-bind=<addr>", "Bind to given address and always listen on it. Use [host]:port notation for IPv6", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
@@ -1369,8 +1370,6 @@ bool AppInitMain(const util::Ref& context, NodeContext& node)
     // is not yet setup and may end up being set up twice if we
     // need to reindex later.
 
-    assert(!node.banman);
-    node.banman = MakeUnique<BanMan>(GetDataDir() / "banlist.dat", &uiInterface, gArgs.GetArg("-bantime", DEFAULT_MISBEHAVING_BANTIME));
     assert(!node.connman);
     node.connman = std::unique_ptr<CConnman>(new CConnman(GetRand(std::numeric_limits<uint64_t>::max()), GetRand(std::numeric_limits<uint64_t>::max())));
     // Make mempool generally available in the node context. For example the connection manager, wallet, or RPC threads,
@@ -1470,6 +1469,7 @@ bool AppInitMain(const util::Ref& context, NodeContext& node)
             return InitError(ResolveErrMsg("externalip", strAddr));
     }
 
+    std::vector<std::string> banned_asns;
     // Read asmap file if configured
     if (gArgs.IsArgSet("-asmap")) {
         fs::path asmap_path = fs::path(gArgs.GetArg("-asmap", ""));
@@ -1491,9 +1491,21 @@ bool AppInitMain(const util::Ref& context, NodeContext& node)
         const uint256 asmap_version = SerializeHash(asmap);
         node.connman->SetAsmap(std::move(asmap));
         LogPrintf("Using asmap version %s for IP bucketing\n", asmap_version.ToString());
+
+        if (gArgs.IsArgSet("-asban")) {
+            banned_asns = gArgs.GetArgs("-asban");
+        }
+
     } else {
+        if (gArgs.IsArgSet("-asban")) {
+            InitError(strprintf(_("Could not enforce asban if asmap file is not provided")));
+            return false;
+        }
         LogPrintf("Using /16 prefix for IP bucketing\n");
     }
+
+    assert(!node.banman);
+    node.banman = MakeUnique<BanMan>(GetDataDir() / "banlist.dat", std::move(banned_asns),  &uiInterface, gArgs.GetArg("-bantime", DEFAULT_MISBEHAVING_BANTIME));
 
 #if ENABLE_ZMQ
     g_zmq_notification_interface = CZMQNotificationInterface::Create();

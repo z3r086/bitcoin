@@ -42,7 +42,7 @@ class BanMan
 {
 public:
     ~BanMan();
-    BanMan(fs::path ban_file, CClientUIInterface* client_interface, int64_t default_ban_time);
+    BanMan(fs::path ban_file, std::vector<std::string> banned_asns, CClientUIInterface* client_interface, int64_t default_ban_time);
     void Ban(const CNetAddr& net_addr, const BanReason& ban_reason, int64_t ban_time_offset = 0, bool since_unix_epoch = false);
     void Ban(const CSubNet& sub_net, const BanReason& ban_reason, int64_t ban_time_offset = 0, bool since_unix_epoch = false);
     void ClearBanned();
@@ -67,6 +67,7 @@ private:
     bool m_is_dirty GUARDED_BY(m_cs_banned);
     CClientUIInterface* m_client_interface = nullptr;
     CBanDB m_ban_db;
+    std::vector<std::string> m_banned_asns;
     const int64_t m_default_ban_time;
 };
 

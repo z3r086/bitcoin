@@ -285,6 +285,7 @@ public:
     // If a new asmap was provided, the existing records
     // would be re-bucketed accordingly.
     std::vector<bool> m_asmap;
+    std::vector<bool> m_banned_asns;
 
     // Read asmap from provided binary file
     static std::vector<bool> DecodeAsmap(fs::path path);

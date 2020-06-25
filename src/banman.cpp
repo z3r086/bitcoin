@@ -12,8 +12,8 @@
 #include <util/translation.h>
 
 
-BanMan::BanMan(fs::path ban_file, CClientUIInterface* client_interface, int64_t default_ban_time)
-    : m_client_interface(client_interface), m_ban_db(std::move(ban_file)), m_default_ban_time(default_ban_time)
+BanMan::BanMan(fs::path ban_file, std::vector<std::string> banned_asns, CClientUIInterface* client_interface, int64_t default_ban_time)
+    : m_client_interface(client_interface), m_ban_db(std::move(ban_file)), m_banned_asns(banned_asns), m_default_ban_time(default_ban_time)
 {
     if (m_client_interface) m_client_interface->InitMessage(_("Loading banlist...").translated);
 
