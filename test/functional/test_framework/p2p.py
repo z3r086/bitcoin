@@ -27,6 +27,7 @@ import logging
 import struct
 import sys
 import threading
+import socket
 
 from test_framework.messages import (
     CBlockHeader,
@@ -139,7 +140,7 @@ class P2PConnection(asyncio.Protocol):
     def is_connected(self):
         return self._transport is not None
 
-    def peer_connect(self, dstaddr, dstport, *, net, timeout_factor):
+    def peer_connect(self, dstaddr, dstport, *, net, timeout_factor, node_outgoing=False):
         assert not self.is_connected
         self.timeout_factor = timeout_factor
         self.dstaddr = dstaddr
@@ -149,9 +150,27 @@ class P2PConnection(asyncio.Protocol):
         self.recvbuf = b""
         self.magic_bytes = MAGIC_BYTES[net]
         logger.debug('Connecting to Bitcoin Node: %s:%d' % (self.dstaddr, self.dstport))
+        self.node_outgoing = node_outgoing
 
         loop = NetworkThread.network_event_loop
-        conn_gen_unsafe = loop.create_connection(lambda: self, host=self.dstaddr, port=self.dstport)
+
+        if self.node_outgoing:
+            logger.debug('Connecting from Bitcoin Node: %s:%d' % (self.dstaddr, self.dstport))
+            listen_sock = socket.socket()
+            listen_sock.bind(('127.0.0.1', 0))
+            listen_sock.listen(1)
+            listen_port = listen_sock.getsockname()[1]
+            self.rpc.addnode('127.0.0.1:%u' % (listen_port,), 'onetry')
+            (sock, addr) = listen_sock.accept()
+            assert sock
+            listen_sock.close()
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setblocking(False)
+            conn_gen_unsafe = loop.create_connection(lambda: self, sock=sock)
+        else:
+            logger.debug('Connecting to Bitcoin Node: %s:%d' % (self.dstaddr, self.dstport))
+            conn_gen_unsafe = loop.create_connection(lambda: self, host=self.dstaddr, port=self.dstport)
+
         conn_gen = lambda: loop.call_soon_threadsafe(loop.create_task, conn_gen_unsafe)
         return conn_gen
 
