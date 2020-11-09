@@ -1070,6 +1070,9 @@ void PeerManagerImpl::FinalizeNode(const CNode& node, bool& fUpdateConnectionTim
     }
     EraseOrphansFor(nodeid);
     m_txrequest.DisconnectedPeer(nodeid);
+    if (m_reconciliation.IsPeerRegistered(nodeid)) {
+        m_reconciliation.RemovePeer(nodeid);
+    }
     nPreferredDownload -= state->fPreferredDownload;
     nPeersWithValidatedDownloads -= (state->nBlocksInFlightValidHeaders != 0);
     assert(nPeersWithValidatedDownloads >= 0);

@@ -61,6 +61,10 @@ class TxReconciliationTracker {
      */
     std::optional<bool> IsPeerChosenForFlooding(const NodeId peer_id) const;
 
+    /**
+     * Removes any reconciliation-related state/notion of the peer.
+     */
+    void RemovePeer(const NodeId peer_id);
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
