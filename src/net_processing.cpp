@@ -716,6 +716,25 @@ struct Peer {
 
             m_local_short_id_mapping.clear();
         }
+
+        /**
+        * When during reconciliation we find a set difference successfully (by combining sketches),
+        * we want to find which transactions are missing on our and on their side.
+        * For those missing on our side, we may only find short IDs.
+        */
+        std::vector<uint256> GetRelevantIDsFromShortIDs(uint64_t diff[], uint8_t diff_size, std::vector<uint32_t>& local_missing)
+        {
+            std::vector<uint256> remote_missing;
+            for (int i = 0; i < diff_size; ++i) {
+                auto local_tx = m_local_short_id_mapping.find(diff[i]);
+                if (local_tx != m_local_short_id_mapping.end()) {
+                    remote_missing.push_back(local_tx->second);
+                } else {
+                    local_missing.push_back(diff[i]);
+                }
+            }
+            return remote_missing;
+        }
     };
 
     /// nullptr if we're not reconciling (neither passively nor actively) with this peer.
