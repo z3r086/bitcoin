@@ -333,6 +333,9 @@ private:
     void AddTxAnnouncement(const CNode& node, const GenTxid& gtxid, std::chrono::microseconds current_time)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    /** Immediately announce transactions to a given peer via INV message(s). */
+    void AnnounceTxs(const std::vector<uint256>& remote_missing_wtxids, CNode& pto);
+
     /** Send a version message to a peer */
     void PushNodeVersion(CNode& pnode, int64_t nTime);
 
@@ -2566,6 +2569,30 @@ static void ProcessGetCFCheckPt(CNode& peer, CDataStream& vRecv, const CChainPar
               stop_index->GetBlockHash(),
               headers);
     connman.PushMessage(&peer, std::move(msg));
+}
+
+void PeerManagerImpl::AnnounceTxs(const std::vector<uint256>& remote_missing_wtxids, CNode& pto)
+{
+    if (remote_missing_wtxids.size() == 0) return;
+
+    const CNetMsgMaker msgMaker(pto.GetCommonVersion());
+    std::vector<CInv> remote_missing_invs;
+    remote_missing_invs.reserve(std::min<size_t>(remote_missing_wtxids.size(), MAX_INV_SZ));
+
+    // No need to add transactions to peer's filter or do checks
+    // because it was already done when adding to the reconciliation set.
+    for (const auto& wtxid: remote_missing_wtxids) {
+        CInv winv(MSG_WTX, wtxid);
+        remote_missing_invs.push_back(winv);
+        if (remote_missing_invs.size() == MAX_INV_SZ) {
+            m_connman.PushMessage(&pto, msgMaker.Make(NetMsgType::INV, remote_missing_invs));
+            remote_missing_invs.clear();
+        }
+    }
+
+    if (remote_missing_invs.size() != 0) {
+        m_connman.PushMessage(&pto, msgMaker.Make(NetMsgType::INV, remote_missing_invs));
+    }
 }
 
 void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDataStream& vRecv,
