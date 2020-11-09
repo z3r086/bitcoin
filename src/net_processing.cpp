@@ -592,6 +592,28 @@ struct Peer {
         };
         ReconPhase m_outgoing_recon{ReconPhase::NONE};
         ReconPhase m_incoming_recon{ReconPhase::NONE};
+
+        /**
+         * Reconciliation sketches are computed over short transaction IDs.
+         * This is a cache of these IDs enabling faster lookups of full wtxids,
+         * useful when peer will ask for missing transactions by short IDs
+         * at the end of a reconciliation round.
+         */
+        std::map<uint32_t, uint256> m_local_short_id_mapping;
+
+        /**
+        * Reconciliation sketches are computed over short transaction IDs.
+        * Short IDs are salted with a link-specific constant value.
+        */
+        uint32_t ComputeShortID(uint256 wtxid)
+        {
+            uint64_t k0 = m_salt.GetUint64(0);
+            uint64_t k1 = m_salt.GetUint64(1);
+            uint64_t s = SipHashUint256(k0, k1, wtxid);
+            uint32_t short_txid = 1 + (s & 0xFFFFFFFF);
+            m_local_short_id_mapping.insert(std::pair<uint32_t, uint256>(short_txid, wtxid));
+            return short_txid;
+        }
     };
 
     /// nullptr if we're not reconciling (neither passively nor actively) with this peer.
