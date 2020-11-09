@@ -156,6 +156,16 @@ static constexpr double DEFAULT_RECON_Q = 0.02;
  * It helps to save bandwidth and reduce the privacy leak.
  */
 static constexpr uint32_t MAX_OUTBOUND_FLOOD_TO = 8;
+/**
+  * Maximum number of elements to store in the reconciliation set.
+  * Used to bound the memory use. If the limit is reached, new transactions are not added and
+  * forgotten w.r.t. relaying to that peer.
+  * Sets the bound on the following objects:
+  * - reconciliation set
+  * - reconciliation set snapshot
+  * - reconciliation short-full id mapping
+  */
+static const unsigned int MAX_RECON_SET = 10000;
 
 struct COrphanTx {
     // When modifying, adapt the copy of this definition in tests/DoS_tests.
@@ -524,6 +534,14 @@ struct Peer {
          * to better predict future set size differences.
          */
         double m_local_q;
+
+        /**
+         * Store all transactions which we would relay to the peer (policy checks passed, etc.) in this set
+         * instead of announcing them right away. When reconciliation time comes, we will
+         * compute an efficient representation of this set ("sketch") and use it to efficient reconcile
+         * this set with a similar set on the other side of the connection.
+         */
+        std::set<uint256> m_local_set;
     };
 
     /// nullptr if we're not reconciling (neither passively nor actively) with this peer.
@@ -924,7 +942,7 @@ void PeerManager::ReattemptInitialBroadcast(CScheduler& scheduler) const
 
         if (tx != nullptr) {
             LOCK(cs_main);
-            RelayTransaction(txid, tx->GetWitnessHash(), m_connman);
+            RelayTransaction(txid, tx->GetWitnessHash(), m_connman, false);
         } else {
             m_mempool.RemoveUnbroadcastTx(txid, true);
         }
@@ -1531,17 +1549,17 @@ bool static AlreadyHaveBlock(const uint256& block_hash) EXCLUSIVE_LOCKS_REQUIRED
     return LookupBlockIndex(block_hash) != nullptr;
 }
 
-void RelayTransaction(const uint256& txid, const uint256& wtxid, const CConnman& connman)
+void RelayTransaction(const uint256& txid, const uint256& wtxid, const CConnman& connman, bool flood)
 {
-    connman.ForEachNode([&txid, &wtxid](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+    connman.ForEachNode([&txid, &wtxid, flood](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
         AssertLockHeld(::cs_main);
 
         CNodeState* state = State(pnode->GetId());
         if (state == nullptr) return;
         if (state->m_wtxid_relay) {
-            pnode->PushTxInventory(wtxid);
+            pnode->PushTxInventory(wtxid, flood);
         } else {
-            pnode->PushTxInventory(txid);
+            pnode->PushTxInventory(txid, flood);
         }
     });
 }
@@ -2093,7 +2111,7 @@ void PeerManager::ProcessOrphanTx(std::set<uint256>& orphan_work_set)
 
         if (AcceptToMemoryPool(m_mempool, state, porphanTx, &removed_txn, false /* bypass_limits */)) {
             LogPrint(BCLog::MEMPOOL, "   accepted orphan tx %s\n", orphanHash.ToString());
-            RelayTransaction(orphanHash, porphanTx->GetWitnessHash(), m_connman);
+            RelayTransaction(orphanHash, porphanTx->GetWitnessHash(), m_connman, true);
             for (unsigned int i = 0; i < porphanTx->vout.size(); i++) {
                 auto it_by_prev = mapOrphanTransactionsByPrev.find(COutPoint(orphanHash, i));
                 if (it_by_prev != mapOrphanTransactionsByPrev.end()) {
@@ -3178,7 +3196,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
                     LogPrintf("Not relaying non-mempool transaction %s from forcerelay peer=%d\n", tx.GetHash().ToString(), pfrom.GetId());
                 } else {
                     LogPrintf("Force relaying tx %s from peer=%d\n", tx.GetHash().ToString(), pfrom.GetId());
-                    RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), m_connman);
+                    RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), m_connman, true);
                 }
             }
             return;
@@ -3193,7 +3211,12 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
             // requests for it.
             m_txrequest.ForgetTxHash(tx.GetHash());
             m_txrequest.ForgetTxHash(tx.GetWitnessHash());
-            RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), m_connman);
+
+            // Flood those transactions which were received either via flooding, or inbound reconciliation,
+            // but NOT via outbound reconciliation. Flooding then is mainly used for initial propagation
+            // of new transactions across a network of reachable nodes quickly.
+            bool flood = !(peer->m_recon_state && peer->m_recon_state->m_responder);
+            RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), m_connman, flood);
             for (unsigned int i = 0; i < tx.vout.size(); i++) {
                 auto it_by_prev = mapOrphanTransactionsByPrev.find(COutPoint(txid, i));
                 if (it_by_prev != mapOrphanTransactionsByPrev.end()) {
@@ -4213,11 +4236,11 @@ public:
         m_wtxid_relay = use_wtxid;
     }
 
-    bool operator()(std::set<uint256>::iterator a, std::set<uint256>::iterator b)
+    bool operator()(std::map<uint256, bool>::iterator a, std::map<uint256, bool>::iterator b)
     {
         /* As std::make_heap produces a max-heap, we want the entries with the
          * fewest ancestors/highest fee to sort later. */
-        return mp->CompareDepthAndScore(*b, *a, m_wtxid_relay);
+        return mp->CompareDepthAndScore(b->first, a->first, m_wtxid_relay);
     }
 };
 }
@@ -4488,6 +4511,7 @@ bool PeerManager::SendMessages(CNode* pto)
         // Message: inventory
         //
         std::vector<CInv> vInv;
+        PeerRef peer = GetPeerRef(pto->GetId());
         {
             LOCK(pto->cs_inventory);
             vInv.reserve(std::max<size_t>(pto->vInventoryBlockToSend.size(), INVENTORY_BROADCAST_MAX));
@@ -4508,11 +4532,11 @@ bool PeerManager::SendMessages(CNode* pto)
                 bool fSendTrickle = pto->HasPermission(PF_NOBAN);
                 if (pto->m_tx_relay->nNextInvSend < current_time) {
                     fSendTrickle = true;
-                    if (pto->IsInboundConn()) {
-                        pto->m_tx_relay->nNextInvSend = std::chrono::microseconds{m_connman.PoissonNextSendInbound(count_microseconds(current_time), INVENTORY_BROADCAST_INTERVAL)};
-                    } else {
-                        // Use half the delay for outbound peers, as there is less privacy concern for them.
+                    if (peer->m_recon_state || !pto->IsInboundConn()) {
+                        // Use half the delay as there is less privacy concern.
                         pto->m_tx_relay->nNextInvSend = PoissonNextSend(current_time, std::chrono::seconds{INVENTORY_BROADCAST_INTERVAL >> 1});
+                    } else {
+                        pto->m_tx_relay->nNextInvSend = std::chrono::microseconds{m_connman.PoissonNextSendInbound(count_microseconds(current_time), INVENTORY_BROADCAST_INTERVAL)};
                     }
                 }
 
@@ -4559,9 +4583,10 @@ bool PeerManager::SendMessages(CNode* pto)
                 // Determine transactions to relay
                 if (fSendTrickle) {
                     // Produce a vector with all candidates for sending
-                    std::vector<std::set<uint256>::iterator> vInvTx;
+                    std::vector<std::map<uint256, bool>::iterator> vInvTx;
+                    std::vector<uint256> txs_to_reconcile;
                     vInvTx.reserve(pto->m_tx_relay->setInventoryTxToSend.size());
-                    for (std::set<uint256>::iterator it = pto->m_tx_relay->setInventoryTxToSend.begin(); it != pto->m_tx_relay->setInventoryTxToSend.end(); it++) {
+                    for (std::map<uint256, bool>::iterator it = pto->m_tx_relay->setInventoryTxToSend.begin(); it != pto->m_tx_relay->setInventoryTxToSend.end(); it++) {
                         vInvTx.push_back(it);
                     }
                     CFeeRate filterrate;
@@ -4580,9 +4605,9 @@ bool PeerManager::SendMessages(CNode* pto)
                     while (!vInvTx.empty() && nRelayedTransactions < INVENTORY_BROADCAST_MAX) {
                         // Fetch the top element from the heap
                         std::pop_heap(vInvTx.begin(), vInvTx.end(), compareInvMempoolOrder);
-                        std::set<uint256>::iterator it = vInvTx.back();
+                        std::map<uint256, bool>::iterator it = vInvTx.back();
                         vInvTx.pop_back();
-                        uint256 hash = *it;
+                        uint256 hash = it->first;
                         CInv inv(state.m_wtxid_relay ? MSG_WTX : MSG_TX, hash);
                         // Remove it from the to-be-sent set
                         pto->m_tx_relay->setInventoryTxToSend.erase(it);
@@ -4602,9 +4627,17 @@ bool PeerManager::SendMessages(CNode* pto)
                             continue;
                         }
                         if (pto->m_tx_relay->pfilter && !pto->m_tx_relay->pfilter->IsRelevantAndUpdate(*txinfo.tx)) continue;
-                        // Send
+
+                        bool flood_tx = it->second;
+                        if (!peer->m_recon_state || (peer->m_recon_state->m_flood_to && flood_tx))
+                            // Always flood to non-reconciliation nodes supporting tx relay.
+                            // For reconciliation nodes, flood if flood_to is set up and transaction is meant for flooding.
+                            vInv.push_back(inv);
+                        else {
+                            // Storing to populate the reconciliation set.
+                            txs_to_reconcile.push_back(txinfo.tx->GetWitnessHash());
+                        }
                         State(pto->GetId())->m_recently_announced_invs.insert(hash);
-                        vInv.push_back(inv);
                         nRelayedTransactions++;
                         {
                             // Expire old relay messages
@@ -4636,6 +4669,28 @@ bool PeerManager::SendMessages(CNode* pto)
                             // filter, when a child tx is requested. See
                             // ProcessGetData().
                             pto->m_tx_relay->filterInventoryKnown.insert(txid);
+                        }
+                    }
+
+                    // Populating local reconciliation set.
+                    if (peer->m_recon_state && txs_to_reconcile.size() != 0) {
+                        assert(peer->m_recon_state->m_sender || peer->m_recon_state->m_responder);
+                        int64_t recon_set_overflow = peer->m_recon_state->m_local_set.size() + txs_to_reconcile.size() - MAX_RECON_SET;
+                        if (recon_set_overflow > 0) {
+                            LogPrint(BCLog::NET, "Reconciliation set for the peer=%d is at capacity, not adding new transactions. \n", pto->GetId());
+                            // Since we reconcile frequently, it either means:
+                            // (1) a peer for some reason does not request reconciliations from us for a long while, or
+                            // (2) really a lot of valid fee-paying transactions were dumped on us at once.
+                            // We don't care about a laggy peer (1) because we probably can't help them even if we flood transactions.
+                            // However, exploiting (2) should not prevent us from relaying certain transactions.
+                            // Since computing a sketch over too many elements is too expensive, we will just flood some transactions here.
+                            std::vector<uint256> txs_to_flood = std::vector<uint256>(txs_to_reconcile.end() - recon_set_overflow, txs_to_reconcile.end());
+                            txs_to_reconcile.resize(txs_to_reconcile.size() - recon_set_overflow);
+                            AnnounceTxs(txs_to_flood, pto, msgMaker, &m_connman);
+                        }
+
+                        for (uint256 wtxid : txs_to_reconcile) {
+                            peer->m_recon_state->m_local_set.insert(wtxid);
                         }
                     }
                 }

@@ -1009,9 +1009,10 @@ public:
 
         mutable RecursiveMutex cs_tx_inventory;
         CRollingBloomFilter filterInventoryKnown GUARDED_BY(cs_tx_inventory){50000, 0.000001};
-        // Set of transaction ids we still have to announce.
-        // They are sorted by the mempool before relay, so the order is not important.
-        std::set<uint256> setInventoryTxToSend;
+        // Set of transaction ids we still have to announce, and whether we may flood them
+        // in case if peer is meant to receive flooding, as opposed to reconcile.
+        // Transactions are sorted by the mempool before relay, so the order is not important.
+        std::map<uint256, bool> setInventoryTxToSend;
         // Used for BIP35 mempool sending
         bool fSendMempool GUARDED_BY(cs_tx_inventory){false};
         // Last time a "MEMPOOL" request was serviced.
@@ -1181,12 +1182,12 @@ public:
         }
     }
 
-    void PushTxInventory(const uint256& hash)
+    void PushTxInventory(const uint256& hash, bool flood)
     {
         if (m_tx_relay == nullptr) return;
         LOCK(m_tx_relay->cs_tx_inventory);
         if (!m_tx_relay->filterInventoryKnown.contains(hash)) {
-            m_tx_relay->setInventoryTxToSend.insert(hash);
+            m_tx_relay->setInventoryTxToSend.insert(std::pair<uint256, bool>(hash, flood));
         }
     }
 

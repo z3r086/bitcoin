@@ -114,7 +114,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
             break;
         }
         case 9: {
-            node.PushTxInventory(ConsumeUInt256(fuzzed_data_provider));
+            node.PushTxInventory(ConsumeUInt256(fuzzed_data_provider), false);
             break;
         }
         case 10: {
