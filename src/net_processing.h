@@ -145,6 +145,15 @@ private:
     int64_t m_stale_tip_check_time; //!< Next time to check for stale tip
 
     /**
+     * Return the number of outbound peers we relay transactions to
+     * in a specified way (flooding or reconciliation).
+     * Used to determine whether we should flood to a new peer
+     * which supports reconciliation, in case we haven't reached
+     * the outbound flooding bandwidth-conserving limit.
+     */
+    size_t GetTxRelayOutboundCountByRelayType(bool flooding) const;
+
+    /**
      * Transaction reconciliation should happen with peers in the same order,
      * because the efficiency gain is the highest when reconciliation set difference
      * is predictable. This queue is used to maintain the order of

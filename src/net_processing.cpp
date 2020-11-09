@@ -150,6 +150,12 @@ static constexpr size_t MAX_PCT_ADDR_TO_SEND = 23;
 static const std::string RECON_STATIC_SALT = "Tx Relay Salting";
 /** Default coefficient used to estimate set difference for tx reconciliation. */
 static constexpr double DEFAULT_RECON_Q = 0.02;
+/**
+ * When considering whether we should flood to an outbound connection supporting reconciliation,
+ * see how many outbound connections are already used for flooding. Flood only if the limit is not reached.
+ * It helps to save bandwidth and reduce the privacy leak.
+ */
+static constexpr uint32_t MAX_OUTBOUND_FLOOD_TO = 8;
 
 struct COrphanTx {
     // When modifying, adapt the copy of this definition in tests/DoS_tests.
@@ -829,6 +835,30 @@ static void FindNextBlocksToDownload(NodeId nodeid, unsigned int count, std::vec
 }
 
 } // namespace
+
+size_t PeerManager::GetTxRelayOutboundCountByRelayType(bool flooding) const
+{
+    size_t result = 0;
+    m_connman.ForEachNode([flooding, &result](CNode* pnode) {
+        if (!pnode->m_tx_relay)
+            return;
+        if (!pnode->IsFullOutboundConn() && !pnode->IsManualConn())
+            return;
+
+        PeerRef peer = GetPeerRef(pnode->GetId());
+        if (peer->m_recon_state) {
+            // Nodes supporting reconciliation still may be meant for flooding.
+            if (peer->m_recon_state->m_flood_to == flooding)
+                ++result;
+        } else {
+            // Nodes not supporting reconciliation are definitely meant for flooding.
+            // (Unless they don't support tx relay, which is checked above).
+            if (flooding)
+                ++result;
+        }
+    });
+    return result;
+}
 
 void PeerManager::AddTxAnnouncement(const CNode& node, const GenTxid& gtxid, std::chrono::microseconds current_time)
 {
@@ -2638,13 +2668,15 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         if (recon_version != 1) return;
 
          // Do not flood through inbound connections which support reconciliation to save bandwidth.
+         // Flood only through a limited number of outbound connections.
          bool flood_to = false;
          if (pfrom.IsInboundConn()) {
              if (!recon_sender) return;
          } else {
              if (!recon_responder) return;
-             // TODO: Flood only through a limited number of outbound connections.
-            flood_to = true;
+             uint64_t outbound_flooding = GetTxRelayOutboundCountByRelayType(true);
+             if (outbound_flooding < MAX_OUTBOUND_FLOOD_TO)
+                flood_to = true;
          }
 
         peer->m_recon_state = MakeUnique<Peer::ReconState>();
