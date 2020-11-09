@@ -4543,6 +4543,46 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
 
     }
 
+    // Among transactions requested by short ID here, we should send only those transactions
+    // sketched (stored in local set snapshot), because otherwise we would leak privacy (mempool content).
+    if (msg_type == NetMsgType::RECONCILDIFF) {
+        if (peer->m_recon_state == nullptr) return;
+        if (peer->m_recon_state->m_incoming_recon != Peer::ReconState::ReconPhase::INIT_RESPONDED &&
+            peer->m_recon_state->m_incoming_recon != Peer::ReconState::ReconPhase::BISEC_RESPONDED) return;
+        uint8_t success_value;
+        std::vector<uint32_t> ask_shortids;
+        vRecv >> success_value >> ask_shortids;
+        ReconResult success = static_cast<ReconResult>(success_value);
+        std::vector<uint256> remote_missing;
+        if (success == RECON_SUCCESS) {
+            remote_missing = peer->m_recon_state->GetWTXIDsFromShortIDs(ask_shortids);
+        } else if (success == RECON_FAILED) {
+            remote_missing.insert(remote_missing.end(), peer->m_recon_state->m_local_set_snapshot.begin(), peer->m_recon_state->m_local_set_snapshot.end());
+        } else {
+            for (uint256 wtxid : peer->m_recon_state->m_local_set_snapshot) {
+                uint32_t short_id = peer->m_recon_state->ComputeShortID(wtxid);
+                // No matter which chunk failed, always announce what is asked for by short id
+                if (std::find(ask_shortids.begin(), ask_shortids.end(), short_id) != ask_shortids.end()) {
+                    remote_missing.push_back(wtxid);
+                }
+                if (success == RECON_LOW_FAILED) {
+                    // High chunk bisection succeeded and asked for in ask_shortid, announce only remaining from the low chunk.
+                    if (short_id <= BISECTION_MEDIAN) {
+                        remote_missing.push_back(wtxid);
+                    }
+                } else if (success == RECON_HIGH_FAILED) {
+                    // Low chunk bisection succeeded and asked for in ask_shortid, announce only remaining from the high chunk
+                    if (short_id > BISECTION_MEDIAN) {
+                        remote_missing.push_back(wtxid);
+                    }
+                }
+            }
+        }
+        AnnounceTxs(remote_missing, &pfrom, msgMaker, &m_connman);
+        peer->m_recon_state->FinalizeReconciliation(false, Peer::ReconState::LocalQAction::Q_KEEP, 0, 0);
+        return;
+    }
+
     // Ignore unknown commands for extensibility
     LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
     return;
