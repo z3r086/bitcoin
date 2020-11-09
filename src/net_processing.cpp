@@ -2372,6 +2372,28 @@ static void ProcessGetCFCheckPt(CNode& peer, CDataStream& vRecv, const CChainPar
     connman.PushMessage(&peer, std::move(msg));
 }
 
+/**
+ * Announce transactions a peer is missing after reconciliation is done.
+ * No need to add transactions to peer's filter or do checks
+ * because it was already done when adding to the reconciliation set.
+ */
+void static AnnounceTxs(std::vector<uint256> remote_missing_wtxids, CNode* pto, CNetMsgMaker msgMaker, CConnman* connman)
+{
+    if (remote_missing_wtxids.size() != 0) {
+        std::vector<CInv> remote_missing_invs;
+        for (uint256 wtxid: remote_missing_wtxids) {
+            CInv winv(MSG_WTX, wtxid);
+            remote_missing_invs.push_back(winv);
+            if (remote_missing_invs.size() == MAX_INV_SZ) {
+                connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, remote_missing_invs));
+                remote_missing_invs.clear();
+            }
+        }
+        if (remote_missing_invs.size() != 0)
+            connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, remote_missing_invs));
+    }
+}
+
 void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDataStream& vRecv,
                                          const std::chrono::microseconds time_received,
                                          const std::atomic<bool>& interruptMsgProc)
