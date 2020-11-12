@@ -21,6 +21,7 @@
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <random.h>
+#include <reconhandler.h>
 #include <reverse_iterator.h>
 #include <scheduler.h>
 #include <streams.h>
@@ -79,7 +80,14 @@ static constexpr int32_t MAX_PEER_TX_REQUEST_IN_FLIGHT = 100;
 /** Maximum number of transactions to consider for requesting, per peer. It provides a reasonable DoS limit to
  *  per-peer memory usage spent on announcements, while covering peers continuously sending INVs at the maximum
  *  rate (by our own policy, see INVENTORY_BROADCAST_PER_SECOND) for several minutes, while not receiving
- *  the actual transaction (from any peer) in response to requests for them. */
+ *  the actual transaction (from any peer) in response to requests for them.
+ *  Also limits a maximum number of elements to store in the reconciliation set. After the limit is reached,
+ *  the remaining transactions are set to be flooded to that peer.
+ *  W.r.t set reconciliation, sets the bound on the following objects:
+ *  - reconciliation set;
+ *  - reconciliation set snapshot;
+ *  - reconciliation short-full id mapping.
+ */
 static constexpr int32_t MAX_PEER_TX_ANNOUNCEMENTS = 5000;
 /** How long to delay requesting transactions via txids, if we have wtxid-relaying peers */
 static constexpr auto TXID_RELAY_DELAY = std::chrono::seconds{2};
@@ -124,12 +132,12 @@ static constexpr std::chrono::hours AVG_LOCAL_ADDRESS_BROADCAST_INTERVAL{24};
 static constexpr std::chrono::seconds AVG_ADDRESS_BROADCAST_INTERVAL{30};
 /** Average delay between trickled inventory transmissions in seconds.
  *  Blocks and peers with noban permission bypass this, outbound peers get half this delay. */
-static const unsigned int INVENTORY_BROADCAST_INTERVAL = 5;
+static const unsigned int INVENTORY_BROADCAST_INTERVAL = 2;
 /** Maximum rate of inventory items to send per second.
  *  Limits the impact of low-fee transaction floods. */
 static constexpr unsigned int INVENTORY_BROADCAST_PER_SECOND = 7;
 /** Maximum number of inventory items to send per transmission. */
-static constexpr unsigned int INVENTORY_BROADCAST_MAX = INVENTORY_BROADCAST_PER_SECOND * INVENTORY_BROADCAST_INTERVAL;
+static constexpr unsigned int INVENTORY_BROADCAST_MAX = INVENTORY_BROADCAST_PER_SECOND * INVENTORY_BROADCAST_INTERVAL * 4;
 /** The number of most recently announced transactions a peer can request. */
 static constexpr unsigned int INVENTORY_MAX_RECENT_RELAY = 3500;
 /** Verify that INVENTORY_MAX_RECENT_RELAY is enough to cache everything typically
@@ -312,6 +320,18 @@ private:
     void AddTxAnnouncement(const CNode& node, const GenTxid& gtxid, std::chrono::microseconds current_time)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    /**
+     * Return the number of outbound peers we
+     * relay transactions to by flooding.
+     * Used to determine whether we should flood to a new peer
+     * which supports reconciliation, in case we haven't reached
+     * the outbound flooding bandwidth-conserving limit.
+     */
+    size_t GetFloodingOutboundsCount(const CNode& skip_node) const;
+
+    /** Announce transactions a peer is missing after reconciliation is done. */
+    void AnnounceTxs(const std::vector<uint256>& remote_missing_wtxids, CNode& pto);
+
     /** Send a version message to a peer */
     void PushNodeVersion(CNode& pnode, int64_t nTime);
 
@@ -322,6 +342,7 @@ private:
     ChainstateManager& m_chainman;
     CTxMemPool& m_mempool;
     TxRequestTracker m_txrequest GUARDED_BY(::cs_main);
+    ReconciliationHandler m_reconciliation_handler;
 
     /** The height of the best chain */
     std::atomic<int> m_best_height{-1};
@@ -891,6 +912,28 @@ void PeerManagerImpl::PushNodeVersion(CNode& pnode, int64_t nTime)
     }
 }
 
+size_t PeerManagerImpl::GetFloodingOutboundsCount(const CNode& skip_node) const
+{
+    size_t result = 0;
+    m_connman.ForEachNode([this, &result, &skip_node](const CNode* pnode) {
+        if (!pnode->m_tx_relay) return;
+        if (pnode->GetId() == skip_node.GetId()) return;
+        if (!pnode->IsFullOutboundConn() && !pnode->IsManualConn()) return;
+
+        const auto recon_state = m_reconciliation_handler.GetPeerState(pnode->GetId());
+
+        if (recon_state) {
+            // Nodes supporting reconciliation still may be meant for flooding.
+            if ((*recon_state).IsChosenForFlooding()) ++result;
+        } else {
+            // Nodes not supporting reconciliation are definitely meant for flooding,
+            // unless they don't support tx relay, which is already checked above.
+            ++result;
+        }
+    });
+    return result;
+}
+
 void PeerManagerImpl::AddTxAnnouncement(const CNode& node, const GenTxid& gtxid, std::chrono::microseconds current_time)
 {
     AssertLockHeld(::cs_main); // For m_txrequest
@@ -956,7 +999,15 @@ void PeerManagerImpl::ReattemptInitialBroadcast(CScheduler& scheduler) const
 
         if (tx != nullptr) {
             LOCK(cs_main);
-            RelayTransaction(txid, tx->GetWitnessHash(), m_connman);
+            // We re-relay these transactions via reconciliation (same as for initial broadcast),
+            // instead of flooding, to hide the origin of transactions.
+            // Since in Erlay transactions are flooded only inbound->outbound,
+            // non-reachable nodes never flood transactions from other nodes (they have no inbounds).
+            // Thus, making them flood these would tell a receiver that these indeed belong to the
+            // flooding non-reachable nodes. Instead, we relay them via reconciliation,
+            // in which case a receiver can't distinguish them from transactions we reconciled
+            // with some other peer.
+            RelayTransaction(txid, tx->GetWitnessHash(), m_connman, false);
         } else {
             m_mempool.RemoveUnbroadcastTx(txid, true);
         }
@@ -1020,6 +1071,9 @@ void PeerManagerImpl::FinalizeNode(const CNode& node, bool& fUpdateConnectionTim
         assert(g_wtxid_relay_peers == 0);
         assert(m_txrequest.Size() == 0);
     }
+
+    m_reconciliation_handler.RemovePeer(nodeid);
+
     LogPrint(BCLog::NET, "Cleared nodestate for peer=%d\n", nodeid);
 }
 
@@ -1599,17 +1653,19 @@ bool static AlreadyHaveBlock(const uint256& block_hash) EXCLUSIVE_LOCKS_REQUIRED
     return g_chainman.m_blockman.LookupBlockIndex(block_hash) != nullptr;
 }
 
-void RelayTransaction(const uint256& txid, const uint256& wtxid, const CConnman& connman)
+void RelayTransaction(const uint256& txid, const uint256& wtxid, const CConnman& connman, bool flood)
 {
-    connman.ForEachNode([&txid, &wtxid](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+    connman.ForEachNode([&txid, &wtxid, flood](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
         AssertLockHeld(::cs_main);
 
         CNodeState* state = State(pnode->GetId());
         if (state == nullptr) return;
         if (state->m_wtxid_relay) {
-            pnode->PushTxInventory(wtxid);
+            pnode->PushTxInventory(wtxid, flood);
         } else {
-            pnode->PushTxInventory(txid);
+            // Reconciliations are not supported for non-wtxid peers,
+            // so we always use flooding.
+            pnode->PushTxInventory(txid, true);
         }
     });
 }
@@ -2183,7 +2239,7 @@ void PeerManagerImpl::ProcessOrphanTx(std::set<uint256>& orphan_work_set)
 
         if (AcceptToMemoryPool(m_mempool, state, porphanTx, &removed_txn, false /* bypass_limits */)) {
             LogPrint(BCLog::MEMPOOL, "   accepted orphan tx %s\n", orphanHash.ToString());
-            RelayTransaction(orphanHash, porphanTx->GetWitnessHash(), m_connman);
+            RelayTransaction(orphanHash, porphanTx->GetWitnessHash(), m_connman, true);
             for (unsigned int i = 0; i < porphanTx->vout.size(); i++) {
                 auto it_by_prev = mapOrphanTransactionsByPrev.find(COutPoint(orphanHash, i));
                 if (it_by_prev != mapOrphanTransactionsByPrev.end()) {
@@ -2462,6 +2518,30 @@ static void ProcessGetCFCheckPt(CNode& peer, CDataStream& vRecv, const CChainPar
     connman.PushMessage(&peer, std::move(msg));
 }
 
+void PeerManagerImpl::AnnounceTxs(const std::vector<uint256>& remote_missing_wtxids, CNode& pto)
+{
+    if (remote_missing_wtxids.size() == 0) return;
+
+    const CNetMsgMaker msgMaker(pto.GetCommonVersion());
+    std::vector<CInv> remote_missing_invs;
+    remote_missing_invs.reserve(std::min<size_t>(remote_missing_wtxids.size(), MAX_INV_SZ));
+
+    // No need to add transactions to peer's filter or do checks
+    // because it was already done when adding to the reconciliation set.
+    for (const auto& wtxid: remote_missing_wtxids) {
+        CInv winv(MSG_WTX, wtxid);
+        remote_missing_invs.push_back(winv);
+        if (remote_missing_invs.size() == MAX_INV_SZ) {
+            m_connman.PushMessage(&pto, msgMaker.Make(NetMsgType::INV, remote_missing_invs));
+            remote_missing_invs.clear();
+        }
+    }
+
+    if (remote_missing_invs.size() != 0) {
+        m_connman.PushMessage(&pto, msgMaker.Make(NetMsgType::INV, remote_missing_invs));
+    }
+}
+
 void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDataStream& vRecv,
                                      const std::chrono::microseconds time_received,
                                      const std::atomic<bool>& interruptMsgProc)
@@ -2546,6 +2626,13 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
         if (greatest_common_version >= WTXID_RELAY_VERSION) {
             m_connman.PushMessage(&pfrom, msg_maker.Make(NetMsgType::WTXIDRELAY));
+
+            // Reconciliation is supported only when wtxid relay is supported for only
+            // those connections which (at least might) support transaction relay.
+            if (pfrom.IsFullOutboundConn() || pfrom.IsInboundConn() || pfrom.IsManualConn()) {
+                m_connman.PushMessage(&pfrom,
+                    m_reconciliation_handler.PrepareAnnouncement(pfrom.GetId(), pfrom.IsInboundConn(), pfrom.GetCommonVersion()));
+            }
         }
 
         // Signal ADDRv2 support (BIP155).
@@ -2778,6 +2865,28 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             return;
         }
         pfrom.m_wants_addrv2 = true;
+        return;
+    }
+
+    // Received from an inbound peer planning to reconcile transactions with us, or
+    // from an outgoing peer demonstrating readiness to do reconciliations.
+    // If received from outgoing, adds the peer to the reconciliation queue.
+    // Feature negotiation of tx reconciliation should happen between VERSION and
+    // VERACK, to avoid relay problems from switching after a connection is up.
+    if (msg_type == NetMsgType::SENDRECON) {
+        if (!pfrom.m_tx_relay) return;
+        LOCK(cs_main);
+        if (!State(pfrom.GetId())->m_wtxid_relay) return; // SENDRECON is allowed only after WTXIDRELAY.
+
+        bool recon_requestor, recon_responder;
+        uint32_t recon_version;
+        uint64_t remote_salt;
+        vRecv >> recon_requestor >> recon_responder >> recon_version >> remote_salt;
+
+        size_t outbound_flooders = GetFloodingOutboundsCount(pfrom);
+        m_reconciliation_handler.EnableReconciliationSupport(pfrom.GetId(), pfrom.IsInboundConn(),
+            recon_requestor, recon_responder, recon_version, remote_salt, outbound_flooders);
+
         return;
     }
 
@@ -3191,7 +3300,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
                     LogPrintf("Not relaying non-mempool transaction %s from forcerelay peer=%d\n", tx.GetHash().ToString(), pfrom.GetId());
                 } else {
                     LogPrintf("Force relaying tx %s from peer=%d\n", tx.GetHash().ToString(), pfrom.GetId());
-                    RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), m_connman);
+                    RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), m_connman, true);
                 }
             }
             return;
@@ -3206,7 +3315,14 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             // requests for it.
             m_txrequest.ForgetTxHash(tx.GetHash());
             m_txrequest.ForgetTxHash(tx.GetWitnessHash());
-            RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), m_connman);
+
+            // Flood those transactions which were received either via flooding, or inbound reconciliation,
+            // but NOT via outbound reconciliation. Flooding then is mainly used for initial propagation
+            // of new transactions across a network of reachable nodes quickly.
+            const auto recon_state = m_reconciliation_handler.GetPeerState(pfrom.GetId());
+
+            bool flood = !(recon_state && (*recon_state).IsResponder());
+            RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), m_connman, flood);
             for (unsigned int i = 0; i < tx.vout.size(); i++) {
                 auto it_by_prev = mapOrphanTransactionsByPrev.find(COutPoint(txid, i));
                 if (it_by_prev != mapOrphanTransactionsByPrev.end()) {
@@ -3961,6 +4077,52 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         return;
     }
 
+    // Record an (expected) reconciliation request with parameters to respond when time comes.
+    // All initial reconciliation responses will be done at the same time to prevent tx-related privacy leaks.
+    if (msg_type == NetMsgType::REQRECON) {
+        uint16_t peer_recon_set_size, peer_q;
+        vRecv >> peer_recon_set_size >> peer_q;
+        m_reconciliation_handler.HandleReconciliationRequest(pfrom.GetId(), peer_recon_set_size, peer_q);
+        return;
+    }
+
+    // Received a response to the reconciliation request (initial request or request for extension if initial failed).
+    // May leak tx-related privacy if we announce local transactions right away, if a peer is strategic about sending
+    // sketches to us via different connections (requires attacker to occupy multiple outgoing connections).
+    if (msg_type == NetMsgType::SKETCH) {
+        std::vector<uint8_t> skdata;
+        vRecv >> skdata;
+
+        auto result = m_reconciliation_handler.HandleSketch(pfrom.GetId(), pfrom.GetCommonVersion(), skdata);
+        if (result) {
+            m_connman.PushMessage(&pfrom, std::move((*result).first));
+            AnnounceTxs((*result).second, pfrom);
+        } else {
+            pfrom.fDisconnect = true;
+        }
+        return;
+    }
+
+    // Peer requesting extension after initial reconciliation failed on their side.
+    // No privacy leak can happen here because sketch extension is constructed over the snapshot.
+    if (msg_type == NetMsgType::REQSKETCHEXT) {
+        m_reconciliation_handler.HandleIncomingExtensionRequest(pfrom.GetId());
+        return;
+    }
+
+    // Among transactions requested by short ID here, we should send only those transactions
+    // sketched (stored in local set snapshot), because otherwise we would leak privacy (mempool content).
+    if (msg_type == NetMsgType::RECONCILDIFF) {
+        bool recon_result;
+        std::vector<uint32_t> ask_shortids;
+        vRecv >> recon_result >> ask_shortids;
+
+        std::vector<uint256> remote_missing =
+            m_reconciliation_handler.FinalizeIncomingReconciliation(pfrom.GetId(), recon_result, ask_shortids);
+        AnnounceTxs(remote_missing, pfrom);
+        return;
+    }
+
     // Ignore unknown commands for extensibility
     LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
     return;
@@ -4277,11 +4439,11 @@ public:
         m_wtxid_relay = use_wtxid;
     }
 
-    bool operator()(std::set<uint256>::iterator a, std::set<uint256>::iterator b)
+    bool operator()(std::map<uint256, bool>::iterator a, std::map<uint256, bool>::iterator b)
     {
         /* As std::make_heap produces a max-heap, we want the entries with the
          * fewest ancestors/highest fee to sort later. */
-        return mp->CompareDepthAndScore(*b, *a, m_wtxid_relay);
+        return mp->CompareDepthAndScore(b->first, a->first, m_wtxid_relay);
     }
 };
 }
@@ -4576,24 +4738,26 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
             }
             peer->m_blocks_for_inv_relay.clear();
 
+            const auto recon_state = m_reconciliation_handler.GetPeerState(pto->GetId());
+
             if (pto->m_tx_relay != nullptr) {
                 LOCK(pto->m_tx_relay->cs_tx_inventory);
                 // Check whether periodic sends should happen
                 bool fSendTrickle = pto->HasPermission(PF_NOBAN);
                 if (pto->m_tx_relay->nNextInvSend < current_time) {
                     fSendTrickle = true;
-                    if (pto->IsInboundConn()) {
-                        pto->m_tx_relay->nNextInvSend = std::chrono::microseconds{m_connman.PoissonNextSendInbound(count_microseconds(current_time), INVENTORY_BROADCAST_INTERVAL)};
-                    } else {
-                        // Use half the delay for outbound peers, as there is less privacy concern for them.
+                    if (recon_state || !pto->IsInboundConn()) {
+                        // Use half the delay as there is less privacy concern.
                         pto->m_tx_relay->nNextInvSend = PoissonNextSend(current_time, std::chrono::seconds{INVENTORY_BROADCAST_INTERVAL >> 1});
+                    } else {
+                        pto->m_tx_relay->nNextInvSend = std::chrono::microseconds{m_connman.PoissonNextSendInbound(count_microseconds(current_time), INVENTORY_BROADCAST_INTERVAL)};
                     }
                 }
 
                 // Time to send but the peer has requested we not relay transactions.
                 if (fSendTrickle) {
                     LOCK(pto->m_tx_relay->cs_filter);
-                    if (!pto->m_tx_relay->fRelayTxes) pto->m_tx_relay->setInventoryTxToSend.clear();
+                    if (!pto->m_tx_relay->fRelayTxes) pto->m_tx_relay->m_transactions_to_announce.clear();
                 }
 
                 // Respond to BIP35 mempool requests
@@ -4607,7 +4771,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                     for (const auto& txinfo : vtxinfo) {
                         const uint256& hash = state.m_wtxid_relay ? txinfo.tx->GetWitnessHash() : txinfo.tx->GetHash();
                         CInv inv(state.m_wtxid_relay ? MSG_WTX : MSG_TX, hash);
-                        pto->m_tx_relay->setInventoryTxToSend.erase(hash);
+                        pto->m_tx_relay->m_transactions_to_announce.erase(hash);
                         // Don't send transactions that peers will not put into their mempool
                         if (txinfo.fee < filterrate.GetFee(txinfo.vsize)) {
                             continue;
@@ -4629,9 +4793,10 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                 // Determine transactions to relay
                 if (fSendTrickle) {
                     // Produce a vector with all candidates for sending
-                    std::vector<std::set<uint256>::iterator> vInvTx;
-                    vInvTx.reserve(pto->m_tx_relay->setInventoryTxToSend.size());
-                    for (std::set<uint256>::iterator it = pto->m_tx_relay->setInventoryTxToSend.begin(); it != pto->m_tx_relay->setInventoryTxToSend.end(); it++) {
+                    std::vector<std::map<uint256, bool>::iterator> vInvTx;
+                    vInvTx.reserve(pto->m_tx_relay->m_transactions_to_announce.size());
+                    std::vector<uint256> txs_to_reconcile;
+                    for (std::map<uint256, bool>::iterator it = pto->m_tx_relay->m_transactions_to_announce.begin(); it != pto->m_tx_relay->m_transactions_to_announce.end(); it++) {
                         vInvTx.push_back(it);
                     }
                     const CFeeRate filterrate{pto->m_tx_relay->minFeeFilter.load()};
@@ -4646,12 +4811,12 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                     while (!vInvTx.empty() && nRelayedTransactions < INVENTORY_BROADCAST_MAX) {
                         // Fetch the top element from the heap
                         std::pop_heap(vInvTx.begin(), vInvTx.end(), compareInvMempoolOrder);
-                        std::set<uint256>::iterator it = vInvTx.back();
+                        std::map<uint256, bool>::iterator it = vInvTx.back();
                         vInvTx.pop_back();
-                        uint256 hash = *it;
+                        uint256 hash = it->first;
                         CInv inv(state.m_wtxid_relay ? MSG_WTX : MSG_TX, hash);
                         // Remove it from the to-be-sent set
-                        pto->m_tx_relay->setInventoryTxToSend.erase(it);
+                        pto->m_tx_relay->m_transactions_to_announce.erase(it);
                         // Check if not in the filter already
                         if (pto->m_tx_relay->filterInventoryKnown.contains(hash)) {
                             continue;
@@ -4668,9 +4833,17 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                             continue;
                         }
                         if (pto->m_tx_relay->pfilter && !pto->m_tx_relay->pfilter->IsRelevantAndUpdate(*txinfo.tx)) continue;
-                        // Send
+
+                        bool flood_tx = it->second;
+                        if (!recon_state || ((*recon_state).IsChosenForFlooding() && flood_tx)) {
+                            // Always flood to non-reconciliation nodes supporting tx relay.
+                            // For reconciliation nodes, flood if flood_to is set up and transaction is meant for flooding.
+                            vInv.push_back(inv);
+                        } else {
+                            // Storing to populate the reconciliation set.
+                            txs_to_reconcile.push_back(txinfo.tx->GetWitnessHash());
+                        }
                         State(pto->GetId())->m_recently_announced_invs.insert(hash);
-                        vInv.push_back(inv);
                         nRelayedTransactions++;
                         {
                             // Expire old relay messages
@@ -4704,11 +4877,57 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                             pto->m_tx_relay->filterInventoryKnown.insert(txid);
                         }
                     }
+
+                    // Populating local reconciliation set.
+                    if (recon_state && txs_to_reconcile.size() != 0) {
+                        std::vector<uint256> txs_to_flood;
+                        int32_t recon_set_overflow = recon_state->GetLocalSetSize() + txs_to_reconcile.size() - MAX_PEER_TX_ANNOUNCEMENTS;
+                        if (recon_set_overflow > 0) {
+                            LogPrint(BCLog::NET, "Reconciliation set for the peer=%d is at capacity, not adding %i new transactions. \n", pto->GetId(), recon_set_overflow);
+                            // Since we reconcile frequently, it either means:
+                            // (1) a peer for some reason does not request reconciliations from us for a long while, or
+                            // (2) really a lot of valid fee-paying transactions were dumped on us at once.
+                            // We don't care about a laggy peer (1) because we probably can't help them even if we flood transactions.
+                            // However, exploiting (2) should not prevent us from relaying certain transactions.
+                            // Since computing a sketch over too many elements is too expensive, we will just flood some transactions here.
+                            txs_to_flood = std::vector<uint256>(txs_to_reconcile.end() - recon_set_overflow, txs_to_reconcile.end());
+                            txs_to_reconcile.resize(txs_to_reconcile.size() - recon_set_overflow);
+                        }
+                        // Do not use recon_state here because it's meant for read-only and
+                        // not going to be stored anywhere.
+                        m_reconciliation_handler.StoreTxsToAnnounce(pto->GetId(), txs_to_reconcile);
+                        if (txs_to_flood.size() > 0) {
+                            AnnounceTxs(txs_to_flood, *pto);
+                        }
+                    }
                 }
             }
         }
         if (!vInv.empty())
             m_connman.PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
+
+        //
+        // Message: reconciliation request
+        //
+        {
+            auto reconciliation_request_data = m_reconciliation_handler.MaybeRequestReconciliation(pto->GetId());
+            LogPrintf("request reconciliation?\n");
+            if (reconciliation_request_data) {
+                LogPrintf("request reconciliation!\n");
+                m_connman.PushMessage(pto, msgMaker.Make(NetMsgType::REQRECON,
+                    (*reconciliation_request_data).first, (*reconciliation_request_data).second));
+            }
+        }
+
+        //
+        // Message: reconciliation response
+        //
+        {
+            auto response_skdata = m_reconciliation_handler.MaybeRespondToReconciliationRequest(pto->GetId());
+            if (response_skdata) {
+                m_connman.PushMessage(pto, msgMaker.Make(NetMsgType::SKETCH, *response_skdata));
+            }
+        }
 
         // Detect whether we're stalling
         current_time = GetTime<std::chrono::microseconds>();
