@@ -143,6 +143,14 @@ private:
     TxRequestTracker m_txrequest GUARDED_BY(::cs_main);
 
     int64_t m_stale_tip_check_time; //!< Next time to check for stale tip
+
+    /**
+     * Transaction reconciliation should happen with peers in the same order,
+     * because the efficiency gain is the highest when reconciliation set difference
+     * is predictable. This queue is used to maintain the order of
+     * peers chosen for reconciliation.
+     */
+    std::deque<CNode*> m_recon_queue;
 };
 
 struct CNodeStateStats {

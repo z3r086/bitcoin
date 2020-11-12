@@ -146,6 +146,10 @@ static constexpr uint32_t MAX_GETCFILTERS_SIZE = 1000;
 static constexpr uint32_t MAX_GETCFHEADERS_SIZE = 2000;
 /** the maximum percentage of addresses from our addrman to return in response to a getaddr message. */
 static constexpr size_t MAX_PCT_ADDR_TO_SEND = 23;
+/** Static component of the salt used to compute short txids for transaction reconciliation. */
+static const std::string RECON_STATIC_SALT = "Tx Relay Salting";
+/** Default coefficient used to estimate set difference for tx reconciliation. */
+static constexpr double DEFAULT_RECON_Q = 0.02;
 
 struct COrphanTx {
     // When modifying, adapt the copy of this definition in tests/DoS_tests.
@@ -464,6 +468,60 @@ struct Peer {
     * of relay of particular transactions due to collisions in short IDs.
     */
     uint64_t m_local_recon_salt;
+
+    /**
+     * This struct is used to keep track of the reconciliations with a given peer.
+     * Transaction reconciliation means an efficient synchronization of the known
+     * transactions between a pair of peers.
+     * One reconciliation round consists of a sequence of messages. The sequence is
+     * asymmetrical, there is always a requestor and a responder. At the end of the
+     * sequence, nodes are supposed to exchange transactions, so that both of them
+     * have all relevant transactions. For more protocol details, refer to BIP-0330.
+     */
+    struct ReconState {
+        ReconState(){};
+
+        /// Whether this peer will send reconciliation requests.
+        bool m_sender;
+
+        /// Whether this peer will respond to reconciliation requests.
+        bool m_responder;
+
+        /**
+         * Whether we should flood transactions to the peer.
+         * Reconciliation between two nodes does not prevent these nodes
+         * from flooding transactions to each other.
+         * Selective flooding of transactions to only specific peers makes
+         * transaction relay significantly faster.
+         */
+        bool m_flood_to;
+
+        /**
+         * Reconciliation involves computing and transmitting sketches,
+         * which is a bandwidth-efficient representation of transaction IDs.
+         * Since computing sketches over full txID is too CPU-expensive,
+         * they will be computed over shortened IDs instead.
+         * These short IDs will be salted so that they are not the same
+         * across all pairs of peers, because otherwise it would enable network-wide
+         * collisions which may (intentionally or not) halt relay of certain transactions.
+         * Both of the peers contribute to the salt.
+         */
+        uint256 m_salt;
+
+        /**
+         * Computing a set reconciliation sketch involves estimating the difference
+         * between sets of transactions on two sides of the connection. More specifically,
+         * a sketch capacity is computed as
+         * |set_size - local_set_size| + q * (set_size + local_set_size) + c,
+         * where c is a small constant, and q is a node+connection-specific coefficient.
+         * This coefficient is recomputed by every node based on its previous reconciliations,
+         * to better predict future set size differences.
+         */
+        double m_local_q;
+    };
+
+    /// nullptr if we're not reconciling (neither passively nor actively) with this peer.
+    std::unique_ptr<ReconState> m_recon_state;
 };
 
 using PeerRef = std::shared_ptr<Peer>;
@@ -2560,6 +2618,62 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
                 State(pfrom.GetId())->m_wtxid_relay = true;
                 g_wtxid_relay_peers++;
             }
+        }
+        return;
+    }
+
+    // Received from an inbound peer planning to reconcilie transactions with us, or
+    // from an outgoing peer demonstrating readiness to do reconciliations.
+    // If received from outgoing, adds the peer to the reconciliation queue.
+    // Feature negotiation of tx reconciliation should happen between VERSION and
+    // VERACK, to avoid relay problems from switching after a connection is up.
+    if (msg_type == NetMsgType::SENDRECON) {
+        if (!pfrom.m_tx_relay) return;
+        if (peer->m_recon_state != nullptr) return; // Do not support reconciliation salt/version updates.
+
+        bool recon_sender, recon_responder;
+        uint64_t remote_salt;
+        uint32_t recon_version;
+        vRecv >> recon_sender >> recon_responder >> recon_version >> remote_salt;
+        if (recon_version != 1) return;
+
+         // Do not flood through inbound connections which support reconciliation to save bandwidth.
+         bool flood_to = false;
+         if (pfrom.IsInboundConn()) {
+             if (!recon_sender) return;
+         } else {
+             if (!recon_responder) return;
+             // TODO: Flood only through a limited number of outbound connections.
+            flood_to = true;
+         }
+
+        peer->m_recon_state = MakeUnique<Peer::ReconState>();
+        peer->m_recon_state->m_flood_to = flood_to;
+        peer->m_recon_state->m_sender = recon_sender;
+        peer->m_recon_state->m_responder = recon_responder;
+        peer->m_recon_state->m_local_q = DEFAULT_RECON_Q;
+
+        uint64_t local_salt = peer->m_local_recon_salt;
+
+        std::string salt1, salt2;
+        if (remote_salt < local_salt) {
+            salt1 = ToString(remote_salt);
+            salt2 = ToString(local_salt);
+        } else {
+            salt1 = ToString(local_salt);
+            salt2 = ToString(remote_salt);
+        }
+        uint256 full_salt;
+        CSHA256().Write((unsigned char*)RECON_STATIC_SALT.data(), RECON_STATIC_SALT.size()).
+            Write((unsigned char*)salt1.data(), salt1.size()).
+            Write((unsigned char*)salt2.data(), salt2.size()).
+            Finalize(full_salt.begin());
+        peer->m_recon_state->m_salt = full_salt;
+
+        // Reconcile with all outbound peers supporting reconciliation (even if we flood to them),
+        // to not miss transactions they have for us but won't flood.
+        if (peer->m_recon_state->m_responder) {
+            m_recon_queue.push_back(&pfrom);
         }
         return;
     }
