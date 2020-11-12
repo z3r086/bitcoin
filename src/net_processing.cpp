@@ -455,6 +455,15 @@ struct Peer {
     std::deque<CInv> m_getdata_requests GUARDED_BY(m_getdata_requests_mutex);
 
     Peer(NodeId id) : m_id(id) {}
+
+    /**
+    * Salt used to compute short IDs during transaction reconciliation.
+    * Salt is generated randomly per-connection to prevent linking of
+    * connections belonging to the same physical node.
+    * Also, salts should be different per-connection to prevent halting
+    * of relay of particular transactions due to collisions in short IDs.
+    */
+    uint64_t m_local_recon_salt;
 };
 
 using PeerRef = std::shared_ptr<Peer>;
@@ -2362,6 +2371,21 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
 
         if (greatest_common_version >= WTXID_RELAY_VERSION) {
             m_connman.PushMessage(&pfrom, msg_maker.Make(NetMsgType::WTXIDRELAY));
+
+            // Reconciliation is supported only when wtxid relay is supported.
+            bool be_recon_requestor, be_recon_responder;
+            // Currently reconciliation requests flow only in one direction inbound->outbound.
+            if (pfrom.IsFullOutboundConn()) {
+                be_recon_requestor = true;
+                be_recon_responder = false;
+            } else {
+                be_recon_requestor = false;
+                be_recon_responder = true;
+            }
+            uint32_t recon_version = 1;
+            uint64_t local_recon_salt = GetRand(UINT64_MAX);
+            peer->m_local_recon_salt = local_recon_salt;
+            m_connman.PushMessage(&pfrom, msg_maker.Make(NetMsgType::SENDRECON, be_recon_requestor, be_recon_responder, recon_version, local_recon_salt));
         }
 
         m_connman.PushMessage(&pfrom, msg_maker.Make(NetMsgType::VERACK));
