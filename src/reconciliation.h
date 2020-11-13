@@ -93,17 +93,19 @@ public:
 
     std::vector<uint256> AddToReconSet(std::vector<uint256> txs_to_reconcile, uint32_t limit)
     {
+    std::vector<uint256> AddToReconSet(std::vector<uint256> txs_to_reconcile, uint32_t limit)
+    {
+        std::vector<uint256> remaining_txs;
         uint32_t recon_set_overflow = m_local_set.size() + txs_to_reconcile.size() - limit;
         if (recon_set_overflow > 0) {
-            std::vector<uint256> txs_to_flood = std::vector<uint256>(txs_to_reconcile.end() - recon_set_overflow, txs_to_reconcile.end());
+            remaining_txs = std::vector<uint256>(txs_to_reconcile.end() - recon_set_overflow, txs_to_reconcile.end());
             txs_to_reconcile.resize(txs_to_reconcile.size() - recon_set_overflow);
-            return txs_to_reconcile;
         }
 
         for (const auto& wtxid: txs_to_reconcile) {
             m_local_set.insert(wtxid);
         }
 
-        return std::vector<uint256>();
+        return remaining_txs;
     }
 };
