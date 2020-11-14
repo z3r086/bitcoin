@@ -4279,6 +4279,15 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         return;
     }
 
+    // Peer requesting bisection after initial reconciliation failed on their side.
+    // No privacy leak can happen here because bisection sketch is constructed over the snapshot.
+    if (msg_type == NetMsgType::REQBISEC) {
+        if (peer->m_recon_state == nullptr) return;
+        if (peer->m_recon_state->m_incoming_recon != Peer::ReconState::ReconPhase::INIT_RESPONDED) return;
+        peer->m_recon_state->m_incoming_recon = Peer::ReconState::ReconPhase::BISEC_REQUESTED;
+        return;
+    }
+
     // Ignore unknown commands for extensibility
     LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
     return;
