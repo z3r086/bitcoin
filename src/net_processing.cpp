@@ -659,6 +659,63 @@ struct Peer {
             }
             return sketch;
         }
+
+        /**
+        * After a reconciliation round is over, the local q coefficient may be adjusted to enable
+        * better accuracy of future set difference estimations.
+        * Recompute q in case of full reconciliation success (both initially or after bisection).
+        * In case if *one* chunk of the bisection fails, slightly increase q, because it usually just means that
+        * the distribution of values was uneven.
+        * In case reconciliation completely failed (initial and both chunks of bisection), fallback to the default q,
+        * set to cause an overestimation, but should converge to the reasonable q in the next round.
+        * Note that accurate recompute in case of complete failure is difficult, because it requires waiting for GETDATA/INV
+        * the peer would send to us, and find the actual difference from there (also may be inaccurate due to the latencies).
+        */
+        enum LocalQAction {
+            Q_KEEP,
+            Q_RECOMPUTE,
+            Q_INCREASE,
+            Q_SET_DEFAULT
+        };
+
+        /**
+        * Clears the state of the peer when the reconciliation is done.
+        * If this is a bisection finalization, keep the reconciliation set to track
+        * the transactions received from other peers during the reconciliation.
+        * Also keep the set if this if finalizing initial incoming reconciliation, because
+        * there was a time frame when we sent out an initial sketch until peer responded.
+        * If we're finalizing initial outgoing reconciliation, it is safe to clear the set,
+        * because we do not use the snapshot, but sketch the original set (which might have received
+        * few new transactions), and finalize the reconciliation immediately.
+        */
+        void FinalizeReconciliation(bool clear_local_set, LocalQAction action, size_t actual_local_missing, size_t actual_remote_missing)
+        {
+            // According to the erlay spec, reconciliation is initiated by inbound peers.
+            if (m_sender) {
+                assert(m_incoming_recon != ReconPhase::NONE);
+                m_incoming_recon = ReconPhase::NONE;
+            } else {
+                // When reconciliation initialized by us is done, update local q for future reconciliations.
+                if (action == LocalQAction::Q_RECOMPUTE) {
+                    assert(m_outgoing_recon != ReconPhase::NONE);
+                    uint8_t local_set_size = m_local_set.size();
+                    uint8_t remote_set_size = local_set_size + actual_local_missing - actual_remote_missing;
+                    uint8_t set_size_diff = std::abs(local_set_size - remote_set_size);
+                    uint8_t min_size = std::min(local_set_size, remote_set_size);
+                    uint8_t actual_difference = actual_local_missing + actual_remote_missing;
+                    if (min_size != 0)
+                        m_local_q = double(actual_difference - set_size_diff) / min_size;
+                } else if (action == LocalQAction::Q_INCREASE) {
+                    m_local_q *= 1.1;
+                } else if (action == LocalQAction::Q_SET_DEFAULT) {
+                    m_local_q = DEFAULT_RECON_Q;
+                }
+                m_outgoing_recon = ReconPhase::NONE;
+            }
+            if (clear_local_set) m_local_set.clear();
+
+            m_local_short_id_mapping.clear();
+        }
     };
 
     /// nullptr if we're not reconciling (neither passively nor actively) with this peer.
