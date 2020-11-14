@@ -4868,6 +4868,31 @@ bool PeerManager::SendMessages(CNode* pto)
             }
         }
 
+        //
+        // Message: reconciliation response
+        //
+        if (peer->m_recon_state) {
+            // Respond to a requested reconciliation to enable efficient transaction exchange.
+            // Respond only periodically to a) limit CPU usage for sketch computation,
+            // and, b) limit transaction posesssion privacy leak.
+            if (peer->m_recon_state->m_incoming_recon == Peer::ReconState::ReconPhase::INIT_REQUESTED && current_time > peer->m_recon_state->m_next_recon_respond) {
+                std::vector<uint8_t> response_skdata;
+                minisketch* response_sketch = peer->m_recon_state->ComputeSketch(0, true);
+                if (response_sketch != nullptr) {
+                    // It is possible to create a sketch if we had at least one transaction to send to the peer.
+                    size_t ser_size = minisketch_serialized_size(response_sketch);
+                    uint8_t skdata[MAX_SKETCH_CAPACITY * BYTES_PER_SKETCH_ELEMENT];
+                    minisketch_serialize(response_sketch, skdata);
+                    response_skdata.resize(ser_size);
+                    std::copy(skdata, skdata + ser_size, response_skdata.begin());
+                }
+                m_connman.PushMessage(pto, msgMaker.Make(NetMsgType::SKETCH, response_skdata));
+
+                peer->m_recon_state->m_incoming_recon = Peer::ReconState::ReconPhase::INIT_RESPONDED;
+                peer->m_recon_state->m_local_set.clear();
+            }
+        }
+
         // Detect whether we're stalling
         current_time = GetTime<std::chrono::microseconds>();
         if (state.nStallingSince && state.nStallingSince < count_microseconds(current_time) - 1000000 * BLOCK_STALLING_TIMEOUT) {

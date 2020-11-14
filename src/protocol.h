@@ -276,6 +276,13 @@ extern const char *SENDRECON;
  * @since protocol version 80001 as described by BIP 330
  */
 extern const char *REQRECON;
+/**
+ * Contains a sketch of the local reconciliation set,
+ * used to efficiently reconcile transactions.
+ * Peer should respond with "reconcildiff" or "reqbisec" message.
+ * @since protocol version 80001 as described by BIP 330
+ */
+extern const char *SKETCH;
 }; // namespace NetMsgType
 
 /* Get a vector of all valid message types (see above) */
