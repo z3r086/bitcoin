@@ -188,6 +188,8 @@ static constexpr unsigned int RECON_FIELD_SIZE = 32;
 static_assert(RECON_FIELD_SIZE % 8 == 0, "Field size should be divisible by 8");
 static constexpr unsigned int BYTES_PER_SKETCH_ELEMENT = RECON_FIELD_SIZE / 8;
 static constexpr uint16_t MAX_SKETCH_CAPACITY = 2 << 12;
+/** Reconciliation should not result in finding larger transaction set difference. */
+static constexpr uint8_t RECONCIL_MAX_DIFF = 2 << 6;
 /**
 * It is possible that if sketch encodes more elements than the capacity, or
 * if it is constructed of random bytes, sketch decoding may "succeed",
@@ -197,6 +199,15 @@ static constexpr uint16_t MAX_SKETCH_CAPACITY = 2 << 12;
 static constexpr unsigned int RECON_FALSE_POSITIVE_COEF = 16;
 static_assert(RECON_FALSE_POSITIVE_COEF <= 256,
     "Reducing reconciliation false positives beyond 1 in 2**256 is not supported");
+
+/** Represents a reconciliation result, used to decide what to do when the reconciliation is over. */
+enum ReconResult {
+    RECON_FAILED,
+    RECON_LOW_FAILED,
+    RECON_HIGH_FAILED,
+    RECON_SUCCESS
+};
+
 
 struct COrphanTx {
     // When modifying, adapt the copy of this definition in tests/DoS_tests.
@@ -4191,6 +4202,57 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         peer->m_recon_state->m_next_recon_respond = NextReconRespond(current_time);
         return;
     }
+
+    // Received a response to the reconciliation request.
+    // May leak tx-related privacy if we announce local transactions right away, if a peer is strategic about sending
+    // sketches to us via different connections (requires attacker to occupy multiple outgoing connections).
+    if (msg_type == NetMsgType::SKETCH) {
+        if (peer->m_recon_state == nullptr) return;
+        if (peer->m_recon_state->m_outgoing_recon != Peer::ReconState::ReconPhase::INIT_REQUESTED) return;
+
+        std::vector<uint8_t> skdata;
+        vRecv >> skdata;
+
+        // Attempt to decode the received sketch with a local sketch.
+        // Handles both initial reconciliation and bisection cases.
+        if (skdata.size() / BYTES_PER_SKETCH_ELEMENT > MAX_SKETCH_CAPACITY) return;
+        uint16_t remote_sketch_capacity = uint16_t(skdata.size() / BYTES_PER_SKETCH_ELEMENT);
+        minisketch* remote_sketch = minisketch_create(RECON_FIELD_SIZE, 0, remote_sketch_capacity);
+        uint8_t remote_sketch_serialized[MAX_SKETCH_CAPACITY * BYTES_PER_SKETCH_ELEMENT];
+        std::copy(skdata.begin(), skdata.end(), remote_sketch_serialized);
+        minisketch_deserialize(remote_sketch, remote_sketch_serialized);
+
+        minisketch* working_sketch; // Contains sketch of the set difference (full or low chunk)
+        minisketch* local_sketch;   // Stores local sketch (full or low chunk)
+        local_sketch = peer->m_recon_state->ComputeSketch(remote_sketch_capacity, false);
+        if (local_sketch != nullptr) {
+            working_sketch = minisketch_clone(local_sketch);
+            minisketch_merge(working_sketch, remote_sketch);
+        } else {
+            working_sketch = minisketch_clone(remote_sketch);
+        }
+
+        // Attempt to decode the set difference (full or low chunk).
+        uint64_t differences[RECONCIL_MAX_DIFF];
+        ssize_t num_differences = minisketch_decode(working_sketch, RECONCIL_MAX_DIFF, differences);
+        size_t max_possible_differences = minisketch_compute_max_elements(RECON_FIELD_SIZE, remote_sketch_capacity, RECON_FALSE_POSITIVE_COEF);
+        bool decoded = (0 <= num_differences)  && (num_differences <= ssize_t(max_possible_differences));
+
+        std::vector<uint32_t> local_missing;
+        if (decoded) {
+            // Reconciliation over the current working chunk succeeded
+            // Initial reconciliation succeeded
+            // Send/request transactions which found to be missing
+            LogPrint(BCLog::NET, "Outgoing reconciliation with peer=%i succeeded without bisection\n", pfrom.GetId());
+            std::vector<uint256> remote_missing = peer->m_recon_state->GetRelevantIDsFromShortIDs(differences, num_differences, local_missing);
+            AnnounceTxs(remote_missing, &pfrom, msgMaker, &m_connman);
+            m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF, uint8_t(RECON_SUCCESS), local_missing));
+            peer->m_recon_state->FinalizeReconciliation(true, Peer::ReconState::LocalQAction::Q_RECOMPUTE, local_missing.size(), remote_missing.size());
+            return;
+        }
+        return;
+    }
+
     // Ignore unknown commands for extensibility
     LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
     return;

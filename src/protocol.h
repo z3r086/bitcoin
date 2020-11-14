@@ -283,6 +283,12 @@ extern const char *REQRECON;
  * @since protocol version 80001 as described by BIP 330
  */
 extern const char *SKETCH;
+/**
+ * Indicates whether ongoing reconciliation has succeeded,
+ * and requests the missing transactions by short ids.
+ * @since protocol version 80001 as described by BIP 330
+ */
+extern const char *RECONCILDIFF;
 }; // namespace NetMsgType
 
 /* Get a vector of all valid message types (see above) */
