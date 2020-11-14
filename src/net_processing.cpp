@@ -4289,6 +4289,29 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         std::vector<uint8_t> skdata;
         vRecv >> skdata;
 
+        // If an empty sketch was sent (initially or as a bisection), reconciliation will fail.
+        if (skdata.size() == 0) {
+            std::vector<uint256> local_recon_set;
+            bool clear_local_set;
+            if (peer->m_recon_state->m_outgoing_recon == Peer::ReconState::ReconPhase::INIT_REQUESTED) {
+                // If an empty sketch was send to an initial response, the peer does not have any new transactions.
+                LogPrint(BCLog::NET, "Outgoing reconciliation terminated after peer=%i sent empty sketch\n", pfrom.GetId());
+                local_recon_set.assign(peer->m_recon_state->m_local_set.begin(), peer->m_recon_state->m_local_set.end());
+                clear_local_set = true; // safe to do so because we will send all the transactions right here.
+            } else {
+                // Peer's low chunk has no transaction, in this case bisection does not help
+                LogPrint(BCLog::NET, "Outgoing reconciliation failed after peer=%i sent empty bisection sketch\n", pfrom.GetId());
+                local_recon_set.assign(peer->m_recon_state->m_local_set_snapshot.begin(), peer->m_recon_state->m_local_set_snapshot.end());
+                clear_local_set = false; // keep it because it might continue new transactions received during reconciliation.
+            }
+            // In both cases, just send all transactions to the peer and notify about reconciliation failure,
+            // to receive transactions from their reconciliation set.
+            AnnounceTxs(local_recon_set, &pfrom, msgMaker, &m_connman);
+            m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF, uint8_t(RECON_FAILED), std::vector<uint32_t>()));
+            peer->m_recon_state->FinalizeReconciliation(clear_local_set, Peer::ReconState::LocalQAction::Q_SET_DEFAULT, 0, 0);
+            return;
+        }
+
         // Attempt to decode the received sketch with a local sketch.
         // Handles both initial reconciliation and bisection cases.
         if (skdata.size() / BYTES_PER_SKETCH_ELEMENT > MAX_SKETCH_CAPACITY) return;
