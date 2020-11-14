@@ -163,10 +163,11 @@ class ReconState {
         return short_txid;
     }
 
-public:
     /** Keep track of reconciliations with the peer. */
     ReconPhase m_outgoing_recon{RECON_NONE};
     ReconPhase m_incoming_recon{RECON_NONE};
+
+public:
 
     ReconState(bool requestor, bool responder, bool flood_to, uint64_t k0, uint64_t k1) :
         m_requestor(requestor), m_responder(responder), m_flood_to(flood_to),
@@ -197,6 +198,27 @@ public:
         return m_local_q * Q_PRECISION;
     }
 
+    ReconPhase GetIncomingPhase() const
+    {
+        return m_incoming_recon;
+    }
+
+    ReconPhase GetOutgoingPhase() const
+    {
+        return m_outgoing_recon;
+    }
+
+    void UpdateIncomingPhase(ReconPhase phase)
+    {
+        m_incoming_recon = phase;
+        if (phase == RECON_INIT_RESPONDED) m_local_set.clear();
+    }
+
+    void UpdateOutgoingPhase(ReconPhase phase)
+    {
+        m_outgoing_recon = phase;
+    }
+
     std::vector<uint256> AddToReconSet(std::vector<uint256> txs_to_reconcile, uint32_t limit)
     {
         std::vector<uint256> remaining_txs;
@@ -220,6 +242,11 @@ public:
         m_remote_q = updated_q;
         m_remote_set_size = remote_set_size;
         return true;
+    }
+
+    std::chrono::microseconds GetNextRespond()
+    {
+        return m_next_recon_respond;
     }
 
     void UpdateNextReconRespond(std::chrono::microseconds next_recon_respond)
@@ -246,14 +273,14 @@ public:
      * of elements (see BIP-330). Considering whether we are going to send a sketch to a peer or use
      * locally, we estimate the set difference.
      */
-    Minisketch ComputeSketch(const std::set<uint256> local_set, uint16_t& capacity)
+    Minisketch ComputeSketch(uint16_t& capacity)
     {
         Minisketch sketch;
         // Avoid serializing/sending an empty sketch.
-        if (local_set.size() == 0 || capacity == 0) return sketch;
+        if (m_local_set.size() == 0 || capacity == 0) return sketch;
 
         std::vector<uint32_t> short_ids;
-        for (const auto& wtxid: local_set) {
+        for (const auto& wtxid: m_local_set) {
             uint32_t short_txid = ComputeShortID(wtxid);
             short_ids.push_back(short_txid);
             m_local_short_id_mapping.emplace(short_txid, wtxid);
