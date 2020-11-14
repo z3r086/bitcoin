@@ -628,6 +628,23 @@ struct Peer {
         std::map<uint32_t, uint256> m_local_short_id_mapping;
 
         /**
+         * A reconciliation round may involve a bisection, which is an extra exchange of messages.
+         * Since it may happen after a delay (at least network latency), new transactions may come
+         * during that time. To avoid mixing old and new transactions, those which are subject for
+         * bisection of a current reconciliation round are moved to a reconciliation set snapshot
+         * after an initial (non-bisected) sketch is sent.
+         * New transactions are kept in the regular reconciliation set.
+         */
+        std::set<uint256> m_local_set_snapshot;
+
+        /**
+         * A reconciliation round may involve a bisection, in which case we should remember
+         * a capacity of the sketch sent out initially, so that a bisection sketch is of the
+         * same size (sending a different size may be inefficient).
+         */
+        uint32_t m_capacity_snapshot{0};
+
+        /**
          * In a reconciliation round initiated by us, if we asked for a bisection, we want to store
          * the sketches computed/transmitted in the initial step, so that we can use them when a
          * bisected sketch arrives.
@@ -670,6 +687,8 @@ struct Peer {
                 capacity = minisketch_compute_capacity(RECON_FIELD_SIZE, estimated_diff, RECON_FALSE_POSITIVE_COEF);
             }
             capacity = std::min(capacity, MAX_SKETCH_CAPACITY);
+            // If bisection is required, we will use this capacity from the initial reconciliation.
+            m_capacity_snapshot = capacity;
 
             if (short_ids.size() == 0) return nullptr;
             minisketch* sketch = minisketch_create(RECON_FIELD_SIZE, 0, capacity);
@@ -735,6 +754,8 @@ struct Peer {
 
             m_local_short_id_mapping.clear();
             // This is currently belt-and-suspenders, as the code should work even without these calls.
+            m_local_set_snapshot.clear();
+            m_capacity_snapshot = 0;
             m_local_sketch_snapshot = nullptr;
             m_remote_sketch_snapshot = nullptr;
         }
@@ -5062,6 +5083,10 @@ bool PeerManager::SendMessages(CNode* pto)
                 m_connman.PushMessage(pto, msgMaker.Make(NetMsgType::SKETCH, response_skdata));
 
                 peer->m_recon_state->m_incoming_recon = Peer::ReconState::ReconPhase::INIT_RESPONDED;
+                // Be ready to respond to bisection request, to compute the bisection sketch over
+                // the same initial set (without transactions received during the reconciliation).
+                // Allow to store new transactions separately in the original set.
+                peer->m_recon_state->m_local_set_snapshot = peer->m_recon_state->m_local_set;
                 peer->m_recon_state->m_local_set.clear();
             }
         }
