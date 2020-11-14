@@ -14,6 +14,7 @@
 #include <hash.h>
 #include <index/blockfilterindex.h>
 #include <merkleblock.h>
+#include <minisketch/include/minisketch.h>
 #include <netbase.h>
 #include <netmessagemaker.h>
 #include <policy/fees.h>
@@ -182,6 +183,20 @@ static constexpr std::chrono::microseconds RECON_REQUEST_INTERVAL{std::chrono::s
  * when we receive transactions (privacy leak).
  */
 static constexpr std::chrono::microseconds RECON_RESPONSE_INTERVAL{std::chrono::seconds{2}};
+/** The size of the field, used to compute sketches to reconcile transactions (see BIP-330). */
+static constexpr unsigned int RECON_FIELD_SIZE = 32;
+static_assert(RECON_FIELD_SIZE % 8 == 0, "Field size should be divisible by 8");
+static constexpr unsigned int BYTES_PER_SKETCH_ELEMENT = RECON_FIELD_SIZE / 8;
+static constexpr uint16_t MAX_SKETCH_CAPACITY = 2 << 12;
+/**
+* It is possible that if sketch encodes more elements than the capacity, or
+* if it is constructed of random bytes, sketch decoding may "succeed",
+* but the result will be nonsense (false-positive decoding).
+* Given this coef, a false positive probability will be of 1 in 2**coef.
+*/
+static constexpr unsigned int RECON_FALSE_POSITIVE_COEF = 16;
+static_assert(RECON_FALSE_POSITIVE_COEF <= 256,
+    "Reducing reconciliation false positives beyond 1 in 2**256 is not supported");
 
 struct COrphanTx {
     // When modifying, adapt the copy of this definition in tests/DoS_tests.
@@ -613,6 +628,36 @@ struct Peer {
             uint32_t short_txid = 1 + (s & 0xFFFFFFFF);
             m_local_short_id_mapping.insert(std::pair<uint32_t, uint256>(short_txid, wtxid));
             return short_txid;
+        }
+        /**
+        * Reconciliation involves computing a space-efficient representation of transaction identifiers (a sketch).
+        * A sketch has a capacity meaning it allows reconciling at most a certain number of elements. (see BIP-330).
+        * Considering whether we are going to send a sketch to a peer or use locally, we estimate the set difference.
+        */
+        minisketch* ComputeSketch(uint16_t capacity, bool to_send)
+        {
+            std::vector<uint32_t> short_ids;
+            for (uint256 wtxid: m_local_set) {
+                short_ids.push_back(ComputeShortID(wtxid));
+            }
+
+            // If the sketch is for made for sending to the peer requested reconciliation, estimate capacity locally.
+            // Otherwise, just use the capacity provided by the function caller (based on the received sketch).
+            if (to_send) {
+                uint16_t set_size_diff = std::abs(uint16_t(m_local_set.size()) - m_remote_set_size);
+                uint16_t min_size = std::min(uint16_t(m_local_set.size()), m_remote_set_size);
+                uint16_t weighted_min_size = m_remote_q * min_size;
+                uint16_t estimated_diff = 1 + weighted_min_size + set_size_diff;
+                capacity = minisketch_compute_capacity(RECON_FIELD_SIZE, estimated_diff, RECON_FALSE_POSITIVE_COEF);
+            }
+            capacity = std::min(capacity, MAX_SKETCH_CAPACITY);
+
+            if (short_ids.size() == 0) return nullptr;
+            minisketch* sketch = minisketch_create(RECON_FIELD_SIZE, 0, capacity);
+            for (uint32_t short_id: short_ids) {
+                minisketch_add_uint64(sketch, short_id);
+            }
+            return sketch;
         }
     };
 
