@@ -188,6 +188,8 @@ static constexpr unsigned int RECON_FIELD_SIZE = 32;
 static_assert(RECON_FIELD_SIZE % 8 == 0, "Field size should be divisible by 8");
 static constexpr unsigned int BYTES_PER_SKETCH_ELEMENT = RECON_FIELD_SIZE / 8;
 static constexpr uint16_t MAX_SKETCH_CAPACITY = 2 << 12;
+/** Per reconciliation bisection, a space of all posible short IDs should be split into halves. */
+static constexpr uint32_t BISECTION_MEDIAN = 2 << (RECON_FIELD_SIZE - 2);
 /** Reconciliation should not result in finding larger transaction set difference. */
 static constexpr uint8_t RECONCIL_MAX_DIFF = 2 << 6;
 /**
@@ -665,31 +667,67 @@ struct Peer {
             m_local_short_id_mapping.insert(std::pair<uint32_t, uint256>(short_txid, wtxid));
             return short_txid;
         }
+
+        /**
+        * Bisection is a step in a reconciliation round, per which a sketch is computed only
+        * over a subset of transactions (a lower half) instead of the full set.
+        */
+        enum BisectionChunk {
+            BISECTION_NONE,
+            BISECTION_LOW,
+        };
+
         /**
         * Reconciliation involves computing a space-efficient representation of transaction identifiers (a sketch).
         * A sketch has a capacity meaning it allows reconciling at most a certain number of elements. (see BIP-330).
         * Considering whether we are going to send a sketch to a peer or use locally, we estimate the set difference.
         */
-        minisketch* ComputeSketch(uint16_t capacity, bool to_send)
+        minisketch* ComputeSketch(BisectionChunk bisection_chunk, uint16_t capacity, bool to_send)
         {
             std::vector<uint32_t> short_ids;
-            for (uint256 wtxid: m_local_set) {
-                short_ids.push_back(ComputeShortID(wtxid));
-            }
+            if (m_incoming_recon == ReconPhase::BISEC_REQUESTED || m_outgoing_recon == ReconPhase::BISEC_REQUESTED) {
+                // During bisection, all the relevant transactions are stored in the snapshot.
+                // Original set is used to not miss transactions received during the reconciliation elsewhere.
+                if (m_local_set_snapshot.size() == 0) {
+                    return nullptr;
+                }
+                for (uint256 wtxid: m_local_set_snapshot) {
+                    short_ids.push_back(ComputeShortID(wtxid));
+                }
 
-            // If the sketch is for made for sending to the peer requested reconciliation, estimate capacity locally.
-            // Otherwise, just use the capacity provided by the function caller (based on the received sketch).
-            if (to_send) {
-                uint16_t set_size_diff = std::abs(uint16_t(m_local_set.size()) - m_remote_set_size);
-                uint16_t min_size = std::min(uint16_t(m_local_set.size()), m_remote_set_size);
-                uint16_t weighted_min_size = m_remote_q * min_size;
-                uint16_t estimated_diff = 1 + weighted_min_size + set_size_diff;
-                capacity = minisketch_compute_capacity(RECON_FIELD_SIZE, estimated_diff, RECON_FALSE_POSITIVE_COEF);
-            }
-            capacity = std::min(capacity, MAX_SKETCH_CAPACITY);
-            // If bisection is required, we will use this capacity from the initial reconciliation.
-            m_capacity_snapshot = capacity;
+                std::vector<uint32_t> bisec_short_ids;
+                for (uint32_t short_id: short_ids) {
+                    if (bisection_chunk == BISECTION_LOW) {
+                        if (short_id <= BISECTION_MEDIAN) {
+                            bisec_short_ids.push_back(short_id);
+                        }
+                    } else {
+                        if (short_id > BISECTION_MEDIAN) {
+                            bisec_short_ids.push_back(short_id);
+                        }
+                    }
+                }
+                short_ids = bisec_short_ids;
+                // If bisection is required, we will use this capacity from the initial reconciliation.
+                capacity = m_capacity_snapshot;
+            } else {
+                for (uint256 wtxid: m_local_set) {
+                    short_ids.push_back(ComputeShortID(wtxid));
+                }
 
+                // If the sketch is for made for sending to the peer requested reconciliation, estimate capacity locally.
+                // Otherwise, just use the capacity provided by the function caller (based on the received sketch).
+                if (to_send) {
+                    uint16_t set_size_diff = std::abs(uint16_t(m_local_set.size()) - m_remote_set_size);
+                    uint16_t min_size = std::min(uint16_t(m_local_set.size()), m_remote_set_size);
+                    uint16_t weighted_min_size = m_remote_q * min_size;
+                    uint16_t estimated_diff = 1 + weighted_min_size + set_size_diff;
+                    capacity = minisketch_compute_capacity(RECON_FIELD_SIZE, estimated_diff, RECON_FALSE_POSITIVE_COEF);
+                }
+                capacity = std::min(capacity, MAX_SKETCH_CAPACITY);
+                // If bisection is required, we will use this capacity from the initial reconciliation.
+                m_capacity_snapshot = capacity;
+            }
             if (short_ids.size() == 0) return nullptr;
             minisketch* sketch = minisketch_create(RECON_FIELD_SIZE, 0, capacity);
             for (uint32_t short_id: short_ids) {
@@ -4256,7 +4294,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
 
         minisketch* working_sketch; // Contains sketch of the set difference (full or low chunk)
         minisketch* local_sketch;   // Stores local sketch (full or low chunk)
-        local_sketch = peer->m_recon_state->ComputeSketch(remote_sketch_capacity, false);
+        local_sketch = peer->m_recon_state->ComputeSketch(Peer::ReconState::BisectionChunk::BISECTION_NONE, remote_sketch_capacity, false);
         if (local_sketch != nullptr) {
             working_sketch = minisketch_clone(local_sketch);
             minisketch_merge(working_sketch, remote_sketch);
@@ -5067,11 +5105,26 @@ bool PeerManager::SendMessages(CNode* pto)
         //
         if (peer->m_recon_state) {
             // Respond to a requested reconciliation to enable efficient transaction exchange.
-            // Respond only periodically to a) limit CPU usage for sketch computation,
+            // For initial requests, respond only periodically to a) limit CPU usage for sketch computation,
             // and, b) limit transaction posesssion privacy leak.
-            if (peer->m_recon_state->m_incoming_recon == Peer::ReconState::ReconPhase::INIT_REQUESTED && current_time > peer->m_recon_state->m_next_recon_respond) {
+            // It's safe to respond to bisection request without a delay because they are already limited by initial requests.
+            if ((peer->m_recon_state->m_incoming_recon == Peer::ReconState::ReconPhase::INIT_REQUESTED && current_time > peer->m_recon_state->m_next_recon_respond) ||
+                peer->m_recon_state->m_incoming_recon == Peer::ReconState::ReconPhase::BISEC_REQUESTED) {
                 std::vector<uint8_t> response_skdata;
-                minisketch* response_sketch = peer->m_recon_state->ComputeSketch(0, true);
+                minisketch* response_sketch;
+                if (peer->m_recon_state->m_incoming_recon == Peer::ReconState::ReconPhase::INIT_REQUESTED) {
+                    response_sketch = peer->m_recon_state->ComputeSketch(Peer::ReconState::BisectionChunk::BISECTION_NONE, 0, true);
+                    peer->m_recon_state->m_incoming_recon = Peer::ReconState::ReconPhase::INIT_RESPONDED;
+                    // Be ready to respond to bisection request, to compute the bisection sketch over
+                    // the same initial set (without transactions received during the reconciliation).
+                    // Allow to store new transactions separately in the original set.
+                    peer->m_recon_state->m_local_set_snapshot = peer->m_recon_state->m_local_set;
+                    peer->m_recon_state->m_local_set.clear();
+                } else {
+                    response_sketch = peer->m_recon_state->ComputeSketch(Peer::ReconState::BisectionChunk::BISECTION_LOW, 0, true);
+                    peer->m_recon_state->m_incoming_recon = Peer::ReconState::ReconPhase::BISEC_RESPONDED;
+                }
+
                 if (response_sketch != nullptr) {
                     // It is possible to create a sketch if we had at least one transaction to send to the peer.
                     size_t ser_size = minisketch_serialized_size(response_sketch);
@@ -5081,13 +5134,6 @@ bool PeerManager::SendMessages(CNode* pto)
                     std::copy(skdata, skdata + ser_size, response_skdata.begin());
                 }
                 m_connman.PushMessage(pto, msgMaker.Make(NetMsgType::SKETCH, response_skdata));
-
-                peer->m_recon_state->m_incoming_recon = Peer::ReconState::ReconPhase::INIT_RESPONDED;
-                // Be ready to respond to bisection request, to compute the bisection sketch over
-                // the same initial set (without transactions received during the reconciliation).
-                // Allow to store new transactions separately in the original set.
-                peer->m_recon_state->m_local_set_snapshot = peer->m_recon_state->m_local_set;
-                peer->m_recon_state->m_local_set.clear();
             }
         }
 
