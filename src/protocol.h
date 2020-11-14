@@ -289,6 +289,11 @@ extern const char *SKETCH;
  * @since protocol version 80001 as described by BIP 330
  */
 extern const char *RECONCILDIFF;
+/**
+ * Requests a bisection for ongoing reconciliation.
+ * @since protocol version 80001 as described by BIP 330
+ */
+extern const char *REQBISEC;
 }; // namespace NetMsgType
 
 /* Get a vector of all valid message types (see above) */

@@ -628,6 +628,14 @@ struct Peer {
         std::map<uint32_t, uint256> m_local_short_id_mapping;
 
         /**
+         * In a reconciliation round initiated by us, if we asked for a bisection, we want to store
+         * the sketches computed/transmitted in the initial step, so that we can use them when a
+         * bisected sketch arrives.
+         */
+        minisketch* m_remote_sketch_snapshot;
+        minisketch* m_local_sketch_snapshot;
+
+        /**
         * Reconciliation sketches are computed over short transaction IDs.
         * Short IDs are salted with a link-specific constant value.
         */
@@ -726,6 +734,9 @@ struct Peer {
             if (clear_local_set) m_local_set.clear();
 
             m_local_short_id_mapping.clear();
+            // This is currently belt-and-suspenders, as the code should work even without these calls.
+            m_local_sketch_snapshot = nullptr;
+            m_remote_sketch_snapshot = nullptr;
         }
 
         /**
@@ -4249,6 +4260,21 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
             m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF, uint8_t(RECON_SUCCESS), local_missing));
             peer->m_recon_state->FinalizeReconciliation(true, Peer::ReconState::LocalQAction::Q_RECOMPUTE, local_missing.size(), remote_missing.size());
             return;
+        } else {
+            // Reconciliation over the current working chunk failed.
+            // Initial reconciliation failed.
+            // Store the received sketch and the local sketch, request bisection.
+
+            assert(remote_sketch != nullptr);
+            // Prepare to request bisection.
+            peer->m_recon_state->m_remote_sketch_snapshot = minisketch_clone(remote_sketch);
+            if (local_sketch != nullptr) {
+                peer->m_recon_state->m_local_sketch_snapshot = minisketch_clone(local_sketch);
+            }
+            peer->m_recon_state->m_local_set.clear();
+            LogPrint(BCLog::NET, "Outgoing reconciliation with peer=%i initially failed, requesting bisection\n", pfrom.GetId());
+            m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::REQBISEC));
+            peer->m_recon_state->m_outgoing_recon = Peer::ReconState::ReconPhase::BISEC_REQUESTED;
         }
         return;
     }
