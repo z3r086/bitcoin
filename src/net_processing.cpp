@@ -4288,6 +4288,20 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         std::vector<uint8_t> skdata;
         vRecv >> skdata;
 
+        // If an empty sketch was sent, reconciliation will fail.
+        if (skdata.size() == 0) {
+            // If an empty sketch was send to an initial response, the peer does not have any new transactions.
+            LogPrint(BCLog::NET, "Outgoing reconciliation terminated after peer=%i sent empty sketch\n", pfrom.GetId());
+            // Just send all transactions to the peer and notify about reconciliation failure,
+            // to receive transactions from their reconciliation set.
+            std::vector<uint256> local_set(peer->m_recon_state->m_local_set.begin(), peer->m_recon_state->m_local_set.end());
+            AnnounceTxs(local_set, &pfrom, msgMaker, &m_connman);
+            m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF, uint8_t(RECON_FAILED), std::vector<uint32_t>()));
+            // safe to clear local set because we will send all the transactions right here.
+            peer->m_recon_state->FinalizeReconciliation(true, Peer::ReconState::LocalQAction::Q_SET_DEFAULT, 0, 0);
+            return;
+        }
+
         // Attempt to decode the received sketch with a local sketch.
         if (skdata.size() / BYTES_PER_SKETCH_ELEMENT > MAX_SKETCH_CAPACITY) return;
         uint16_t remote_sketch_capacity = uint16_t(skdata.size() / BYTES_PER_SKETCH_ELEMENT);
@@ -4357,6 +4371,19 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
 
         std::vector<uint8_t> skdata;
         vRecv >> skdata;
+
+        if (skdata.size() == 0) {
+            // Peer's low chunk has no transaction, in this case bisection does not help
+            LogPrint(BCLog::NET, "Outgoing reconciliation failed after peer=%i sent empty bisection sketch\n", pfrom.GetId());
+            // Just send all transactions to the peer and notify about reconciliation failure,
+            // to receive transactions from their reconciliation set.
+            std::vector<uint256> local_set_snapshot(peer->m_recon_state->m_local_set_snapshot.begin(), peer->m_recon_state->m_local_set_snapshot.end());
+            AnnounceTxs(local_set_snapshot, &pfrom, msgMaker, &m_connman);
+            m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF, uint8_t(RECON_FAILED), std::vector<uint32_t>()));
+            // keep the local set because it might continue new transactions received during reconciliation.
+            peer->m_recon_state->FinalizeReconciliation(false, Peer::ReconState::LocalQAction::Q_SET_DEFAULT, 0, 0);
+            return;
+        }
 
         // Attempt to decode the received sketch with a local sketch.
         if (skdata.size() / BYTES_PER_SKETCH_ELEMENT > MAX_SKETCH_CAPACITY) return;
