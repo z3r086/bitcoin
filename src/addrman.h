@@ -527,8 +527,25 @@ public:
             CAddrInfo &info = mapInfo[n];
             int bucket = entryToBucket[n];
             int nUBucketPos = info.GetBucketPosition(nKey, true, bucket);
-            if (format >= Format::V2_ASMAP && nUBuckets == ADDRMAN_NEW_BUCKET_COUNT && vvNew[bucket][nUBucketPos] == -1 &&
-                info.nRefCount < ADDRMAN_NEW_BUCKETS_PER_ADDRESS && serialized_asmap_version == supplied_asmap_version) {
+
+            // We already checked that file format is not "too new" and we can parse it (see lowest_compatible).
+            // Here, just check that the file is compatible by other means:
+            // - constants haven't been changed incompatibly
+            // - asmap has not changed
+            // - bucket/position assignment has't been changed incompatibly
+            // If it's not compatible, reassign buckets/positions.
+
+            const bool asmap_was_supported = format >= Format::V2_ASMAP;
+            // asmap is changed in two cases:
+            // - either it wasn't supported by the file, but now supported;
+            // - or it was supported, byt we have a new asmap file now.
+            const bool asmap_changed = (!asmap_was_supported && m_asmap.size() == 0) ||
+                (asmap_was_supported && serialized_asmap_version != supplied_asmap_version));
+
+            const bool constants_changed_incompatibly = nUBuckets != ADDRMAN_NEW_BUCKET_COUNT && info.nRefCount >= ADDRMAN_NEW_BUCKETS_PER_ADDRESS;
+            const bool assignment_changed = vvNew[bucket][nUBucketPos] != -1;
+
+            if (!asmap_changed && !constants_changed_incompatibly && !assignment_changed) {
                 // Bucketing has not changed, using existing bucket positions for the new table
                 vvNew[bucket][nUBucketPos] = n;
                 info.nRefCount++;
