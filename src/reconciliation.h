@@ -2,6 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <crypto/siphash.h>
+
+#include <chrono>
 #include <set>
 #include <string>
 
@@ -19,6 +22,13 @@ static constexpr uint16_t Q_PRECISION{(2 << 14) - 1};
  * Less frequent reconciliations would introduce high transaction relay latency.
  */
 static constexpr std::chrono::microseconds RECON_REQUEST_INTERVAL{16s};
+/**
+ * Interval between responding to peers' reconciliation requests.
+ * We don't respond to reconciliation requests right away because that would enable monitoring
+ * when we receive transactions (privacy leak).
+ */
+static constexpr std::chrono::microseconds RECON_RESPONSE_INTERVAL{2s};
+
 /**
  * Used to keep track of the current reconciliation round with a peer.
  * Used for both inbound (responded) and outgoing (requested/initiated) reconciliations.
@@ -98,10 +108,41 @@ class ReconState {
      */
     std::set<uint256> m_local_set;
 
+    /**
+     * A reconciliation request comes from a peer with a reconciliation set size from their side,
+     * which is supposed to help us to estimate set difference size. The value is stored here until
+     * we respond to that request with a sketch.
+     */
+    uint16_t m_remote_set_size;
+
+    /**
+     * The use of q coefficients is described above (see local_q comment).
+     * The value transmitted from the peer with a reconciliation requests is stored here until
+     * we respond to that request with a sketch.
+     */
+    double m_remote_q;
+
+    /**
+     * When a reconciliation request is received, instead of responding to it right away,
+     * we schedule a response for later, so that a spy can’t monitor our reconciliation sets.
+     */
+    std::chrono::microseconds m_next_recon_respond{0};
+
+    /**
+     * Reconciliation sketches are computed over short transaction IDs.
+     * Short IDs are salted with a link-specific constant value.
+     */
+    uint32_t ComputeShortID(const uint256 wtxid) const
+    {
+        uint64_t s = SipHashUint256(m_k0, m_k1, wtxid);
+        uint32_t short_txid = 1 + (s & 0xFFFFFFFF);
+        return short_txid;
+    }
 
 public:
-    /** Keep track of the outgoing reconciliation with the peer. */
+    /** Keep track of reconciliations with the peer. */
     ReconPhase m_outgoing_recon{RECON_NONE};
+    ReconPhase m_incoming_recon{RECON_NONE};
 
     ReconState(bool requestor, bool responder, bool flood_to, uint64_t k0, uint64_t k1) :
         m_requestor(requestor), m_responder(responder), m_flood_to(flood_to),
@@ -110,6 +151,11 @@ public:
     bool IsChosenForFlooding() const
     {
         return m_flood_to;
+    }
+
+    bool IsRequestor() const
+    {
+        return m_requestor;
     }
 
     bool IsResponder() const
@@ -141,5 +187,19 @@ public:
         }
 
         return remaining_txs;
+    }
+
+    bool UpdateRemoteState(uint16_t remote_set_size, uint16_t remote_q)
+    {
+        double updated_q = double(remote_q * Q_PRECISION);
+        if (updated_q < 0 || updated_q > 2) return false;
+        m_remote_q = updated_q;
+        m_remote_set_size = remote_set_size;
+        return true;
+    }
+
+    void UpdateNextReconRespond(std::chrono::microseconds next_recon_respond)
+    {
+        m_next_recon_respond = next_recon_respond;
     }
 };
