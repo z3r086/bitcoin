@@ -30,6 +30,12 @@ constexpr uint32_t MAX_OUTBOUND_FLOOD_TO = 8;
  * Less frequent reconciliations would introduce high transaction relay latency.
  */
 constexpr std::chrono::microseconds RECON_REQUEST_INTERVAL{16s};
+/**
+ * Interval between responding to peers' reconciliation requests.
+ * We don't respond to reconciliation requests right away because that would enable monitoring
+ * when we receive transactions (privacy leak).
+ */
+constexpr std::chrono::microseconds RECON_RESPONSE_INTERVAL{2s};
 
 /**
  * Represents phase of the current reconciliation round with a peer.
@@ -110,6 +116,13 @@ class ReconciliationState {
     double m_local_q;
 
     /**
+     * The use of q coefficients is described above (see local_q comment).
+     * The value transmitted from the peer with a reconciliation requests is stored here until
+     * we respond to that request with a sketch.
+     */
+    double m_remote_q;
+
+    /**
      * Store all transactions which we would relay to the peer (policy checks passed, etc.)
      * in this set instead of announcing them right away. When reconciliation time comes, we will
      * compute an efficient representation of this set ("sketch") and use it to efficient reconcile
@@ -117,7 +130,21 @@ class ReconciliationState {
      */
     std::set<uint256> m_local_set;
 
+    /**
+     * A reconciliation request comes from a peer with a reconciliation set size from their side,
+     * which is supposed to help us to estimate set difference size. The value is stored here until
+     * we respond to that request with a sketch.
+     */
+    uint16_t m_remote_set_size;
+
+    /**
+     * When a reconciliation request is received, instead of responding to it right away,
+     * we schedule a response for later, so that a spy can’t monitor our reconciliation sets.
+     */
+    std::chrono::microseconds m_next_recon_respond{0};
+
     /** Keep track of reconciliations with the peer. */
+    ReconciliationPhase m_incoming_recon{RECON_NONE};
     ReconciliationPhase m_outgoing_recon{RECON_NONE};
 
     public:
@@ -163,6 +190,20 @@ class TxReconciliationTracker::Impl {
     void UpdateNextReconRequest(std::chrono::microseconds now) EXCLUSIVE_LOCKS_REQUIRED(m_mutex)
     {
         m_next_recon_request = now + RECON_REQUEST_INTERVAL / m_queue.size();
+    }
+
+    /**
+     * Used to schedule the next initial response for any pending reconciliation request.
+     * Respond to all requests at the same time to prevent transaction possession leak.
+     */
+    std::chrono::microseconds m_next_recon_respond{0};
+    std::chrono::microseconds NextReconRespond()
+    {
+        auto current_time = GetTime<std::chrono::microseconds>();
+        if (m_next_recon_respond < current_time) {
+            m_next_recon_respond = current_time + RECON_RESPONSE_INTERVAL;
+        }
+        return m_next_recon_respond;
     }
 
     public:
@@ -303,6 +344,23 @@ class TxReconciliationTracker::Impl {
         return std::nullopt;
     }
 
+    void HandleReconciliationRequest(const NodeId peer_id, uint16_t peer_recon_set_size, uint16_t peer_q)
+    {
+        double peer_q_converted = double(peer_q * Q_PRECISION);
+        if (peer_q_converted < 0 || peer_q_converted > 2) return;
+
+        LOCK(m_mutex);
+        auto recon_state = m_states.find(peer_id);
+        if (recon_state == m_states.end()) return;
+        if (recon_state->second.m_incoming_recon != RECON_NONE) return;
+        if (recon_state->second.m_we_initiate) return;
+
+        recon_state->second.m_remote_q = peer_q;
+        recon_state->second.m_remote_set_size = peer_recon_set_size;
+        recon_state->second.m_next_recon_respond = NextReconRespond();
+        recon_state->second.m_incoming_recon = RECON_INIT_REQUESTED;
+    }
+
 };
 
 TxReconciliationTracker::TxReconciliationTracker() :
@@ -356,4 +414,9 @@ void TxReconciliationTracker::StoreTxsToAnnounce(const NodeId peer_id, const std
 std::optional<std::pair<uint16_t, uint16_t>> TxReconciliationTracker::MaybeRequestReconciliation(const NodeId peer_id)
 {
     return m_impl->MaybeRequestReconciliation(peer_id);
+}
+
+void TxReconciliationTracker::HandleReconciliationRequest(const NodeId peer_id, uint16_t peer_recon_set_size, uint16_t peer_q)
+{
+    m_impl->HandleReconciliationRequest(peer_id, peer_recon_set_size, peer_q);
 }

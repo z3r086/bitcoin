@@ -88,8 +88,15 @@ class TxReconciliationTracker {
      * If a it's time to request a reconciliation from the peer, this function will return the
      * details of our local state, which should be communicated to the peer so that they better
      * know what we need.
+     * If the peer was not previously registered for reconciliations, returns nullopt.
      */
     std::optional<std::pair<uint16_t, uint16_t>> MaybeRequestReconciliation(const NodeId peer_id);
+
+    /**
+     * Record an (expected) reconciliation request with parameters to respond when time comes. All
+     * initial reconciliation responses will be done at the same time to prevent privacy leaks.
+     */
+    void HandleReconciliationRequest(const NodeId peer_id, uint16_t peer_recon_set_size, uint16_t peer_q);
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
