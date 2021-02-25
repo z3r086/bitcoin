@@ -123,6 +123,12 @@ class TxReconciliationTracker {
      */
     std::optional<std::tuple<bool, bool, std::vector<uint32_t>, std::vector<uint256>>> HandleSketch(
         const NodeId peer_id, int common_version, std::vector<uint8_t>& skdata);
+
+    /**
+     * Peer requesting extension after initial reconciliation failed on their side.
+     * No privacy leak can happen here because sketch extension is constructed over the snapshot.
+     */
+    void HandleIncomingExtensionRequest(const NodeId peer_id);
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
