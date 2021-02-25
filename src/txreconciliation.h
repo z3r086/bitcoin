@@ -114,6 +114,15 @@ class TxReconciliationTracker {
      */
     std::vector<uint256> FinalizeIncomingReconciliation(const NodeId peer_id,
         bool recon_result, const std::vector<uint32_t>& ask_shortids);
+
+    /**
+     * Received a response to the reconciliation request. May leak tx-related privacy if we announce
+     * local transactions right away, in case the peer is strategic about sending sketches to us via
+     * different connections (requires attacker to occupy multiple outgoing connections).
+     * Returns a response we should send to the peer, and the transactions we should announce.
+     */
+    std::optional<std::tuple<bool, std::vector<uint32_t>, std::vector<uint256>>> HandleSketch(
+        const NodeId peer_id, int common_version, std::vector<uint8_t>& skdata);
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
