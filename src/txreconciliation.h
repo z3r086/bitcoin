@@ -121,7 +121,7 @@ class TxReconciliationTracker {
      * different connections (requires attacker to occupy multiple outgoing connections).
      * Returns a response we should send to the peer, and the transactions we should announce.
      */
-    std::optional<std::tuple<bool, std::vector<uint32_t>, std::vector<uint256>>> HandleSketch(
+    std::optional<std::tuple<bool, bool, std::vector<uint32_t>, std::vector<uint256>>> HandleSketch(
         const NodeId peer_id, int common_version, std::vector<uint8_t>& skdata);
 };
 

@@ -64,6 +64,7 @@ enum ReconciliationPhase {
     RECON_NONE,
     RECON_INIT_REQUESTED,
     RECON_INIT_RESPONDED,
+    RECON_EXT_REQUESTED
 };
 
 /**
@@ -190,11 +191,34 @@ class ReconciliationState {
     std::set<uint256> m_local_set;
 
     /**
+     * A reconciliation round may involve an extension, which is an extra exchange of messages.
+     * Since it may happen after a delay (at least network latency), new transactions may come
+     * during that time. To avoid mixing old and new transactions, those which are subject for
+     * extension of a current reconciliation round are moved to a reconciliation set snapshot
+     * after an initial (non-extended) sketch is sent.
+     * New transactions are kept in the regular reconciliation set.
+     */
+    std::set<uint256> m_local_set_snapshot;
+
+    /**
      * A reconciliation request comes from a peer with a reconciliation set size from their side,
      * which is supposed to help us to estimate set difference size. The value is stored here until
      * we respond to that request with a sketch.
      */
     uint16_t m_remote_set_size;
+
+    /**
+     * In a reconciliation round initiated by us, if we asked for an extension, we want to store
+     * the sketch computed/transmitted in the initial step, so that we can use it when
+     * sketch extension arrives.
+     */
+    std::vector<uint8_t> m_remote_sketch_snapshot;
+
+    /**
+     * A reconciliation round may involve an extension, in which case we should remember
+     * a capacity of the sketch sent out initially, so that a sketch extension is of the same size.
+     */
+    uint16_t m_capacity_snapshot{0};
 
     /**
      * Reconciliation sketches are computed over short transaction IDs.
@@ -297,6 +321,8 @@ class ReconciliationState {
     {
         assert(!m_we_initiate);
         m_local_short_id_mapping.clear();
+        // This is currently belt-and-suspenders, as the code should work even without these calls.
+        m_local_set_snapshot.clear();
     }
 
     /**
@@ -317,6 +343,18 @@ class ReconciliationState {
             }
         }
         return std::make_pair(local_missing, remote_missing);
+    }
+
+    /**
+     * TODO document
+     */
+    void PrepareForExtensionResponse(uint16_t sketch_capacity, const std::vector<uint8_t>& remote_sketch)
+    {
+        assert(m_we_initiate);
+        m_capacity_snapshot = sketch_capacity;
+        m_remote_sketch_snapshot = remote_sketch;
+        m_local_set_snapshot = m_local_set;
+        m_local_set.clear();
     }
 };
 
@@ -578,7 +616,7 @@ class TxReconciliationTracker::Impl {
         return remote_missing;
     }
 
-    std::optional<std::tuple<bool, std::vector<uint32_t>, std::vector<uint256>>> HandleSketch(
+    std::optional<std::tuple<bool, bool, std::vector<uint32_t>, std::vector<uint256>>> HandleSketch(
         const NodeId peer_id, int common_version, std::vector<uint8_t>& skdata)
     {
         if (skdata.size() / BYTES_PER_SKETCH_CAPACITY > MAX_SKETCH_CAPACITY) {
@@ -613,7 +651,7 @@ class TxReconciliationTracker::Impl {
             std::vector<uint256> remote_missing = std::vector<uint256>(recon_state->second.m_local_set.begin(), recon_state->second.m_local_set.end());
             recon_state->second.FinalizeOutgoingReconciliation(true, DEFAULT_RECON_Q);
             recon_state->second.m_outgoing_recon = RECON_NONE;
-            return std::make_tuple(false, std::vector<uint32_t>(), remote_missing);
+            return std::make_tuple(true, false, std::vector<uint32_t>(), remote_missing);
         }
 
         assert(remote_sketch);
@@ -628,13 +666,17 @@ class TxReconciliationTracker::Impl {
             std::vector<uint256> remote_missing = missing_txs.second;
 
             size_t local_set_size = recon_state->second.m_local_set.size();
-            recon_state->second.FinalizeOutgoingReconciliation(true, RecomputeQ(local_set_size, local_missing.size(), remote_missing.size()));
+            recon_state->second.FinalizeOutgoingReconciliation(true,
+                RecomputeQ(local_set_size, local_missing.size(), remote_missing.size()));
             recon_state->second.m_outgoing_recon = RECON_NONE;
-            return std::make_tuple(true, local_missing, remote_missing);
+            return std::make_tuple(true, true, local_missing, remote_missing);
         } else {
-            // Reconciliation over the current working sketch failed.
-            // TODO handle failure.
-            return std::nullopt;
+            // Initial reconciliation failed.
+            // Store the received sketch and the local sketch, request extension.
+            LogPrint(BCLog::NET, "Outgoing reconciliation initially failed, requesting extension sketch\n");
+            recon_state->second.m_outgoing_recon = RECON_EXT_REQUESTED;
+            recon_state->second.PrepareForExtensionResponse(remote_sketch_capacity, skdata);
+            return std::make_tuple(false, false, std::vector<uint32_t>(), std::vector<uint256>());
         }
     }
 
@@ -709,7 +751,7 @@ std::vector<uint256> TxReconciliationTracker::FinalizeIncomingReconciliation(con
     return m_impl->FinalizeIncomingReconciliation(peer_id, recon_result, ask_shortids);
 }
 
-std::optional<std::tuple<bool, std::vector<uint32_t>, std::vector<uint256>>> TxReconciliationTracker::HandleSketch(
+std::optional<std::tuple<bool, bool, std::vector<uint32_t>, std::vector<uint256>>> TxReconciliationTracker::HandleSketch(
     const NodeId peer_id, int common_version, std::vector<uint8_t>& skdata)
 {
     return m_impl->HandleSketch(peer_id, common_version, skdata);

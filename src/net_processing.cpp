@@ -4169,10 +4169,14 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
         const auto recon_result_data = m_reconciliation.HandleSketch(pfrom.GetId(), pfrom.GetCommonVersion(), skdata);
         if (recon_result_data) {
-            const auto [recon_result, locally_missing_txs, remotely_missing_txs] = *recon_result_data;
-            m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF,
-                recon_result, locally_missing_txs));
-            AnnounceTxs(remotely_missing_txs, pfrom);
+            const auto [recon_done, recon_result, locally_missing_txs, remotely_missing_txs] = *recon_result_data;
+            if (recon_done) {
+                m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF,
+                    recon_result, locally_missing_txs));
+                AnnounceTxs(remotely_missing_txs, pfrom);
+            } else {
+                m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::REQSKETCHEXT));
+            }
         } else {
             pfrom.fDisconnect = true;
         }
