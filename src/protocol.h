@@ -274,7 +274,7 @@ extern const char *REQTXRCNCL;
  * used to efficiently reconcile transactions.
  * Peer should respond with "reconcildiff" or "reqsketchext" message.
  */
-extern const char *SKETCH;
+extern const char* SKETCH;
 }; // namespace NetMsgType
 
 /* Get a vector of all valid message types (see above) */
