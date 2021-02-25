@@ -105,6 +105,15 @@ class TxReconciliationTracker {
      * returns nullopt.
      */
     std::optional<std::vector<uint8_t>> MaybeRespondToReconciliationRequest(const NodeId peer_id);
+
+    /**
+     * Once we received a signal of reconciliation finalization with a given result from the
+     * initiating peer, return the following transactions to be announced:
+     * - in case of a failure, return all transactions we had for that peer
+     * - in case of a success, return transactions the peer asked for by short id (ask_shortids)
+     */
+    std::vector<uint256> FinalizeIncomingReconciliation(const NodeId peer_id,
+        bool recon_result, const std::vector<uint32_t>& ask_shortids);
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
