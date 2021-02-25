@@ -240,9 +240,10 @@ public:
         return sketch;
     }
 
-    std::vector<uint256> GetAllTransactions() const
+    std::vector<uint256> GetAllTransactions(bool from_snapshot=false) const
     {
-        return std::vector<uint256>(m_local_set.begin(), m_local_set.end());
+        auto working_set = from_snapshot ? m_local_set_snapshot : m_local_set;
+        return std::vector<uint256>(working_set.begin(), working_set.end());
     }
 
     /**
@@ -254,10 +255,12 @@ public:
         assert(m_we_initiate);
         if (clear_local_set) m_local_set.clear();
         m_local_set_snapshot.clear();
+        m_short_id_mapping.clear();
         m_announced_during_extension.clear();
         // This is currently belt-and-suspenders, as the code should work even without these calls.
         m_capacity_snapshot = 0;
         m_remote_sketch_snapshot.clear();
+        m_snapshot_short_id_mapping.clear();
     }
 
     /**
@@ -267,16 +270,33 @@ public:
      */
     void GetRelevantIDsFromShortIDs(const std::vector<uint64_t>& diff,
         // returning values
-        std::vector<uint32_t>& local_missing, std::vector<uint256>& remote_missing) const
+        std::vector<uint32_t>& local_missing, std::vector<uint256>& remote_missing, bool from_snapshot=false) const
     {
+        auto working_mapping = from_snapshot ? m_snapshot_short_id_mapping : m_short_id_mapping;
         for (const auto& diff_short_id: diff) {
-            const auto local_tx = m_short_id_mapping.find(diff_short_id);
-            if (local_tx != m_short_id_mapping.end()) {
+            const auto local_tx = working_mapping.find(diff_short_id);
+            if (local_tx != working_mapping.end()) {
                 remote_missing.push_back(local_tx->second);
             } else {
                 local_missing.push_back(diff_short_id);
             }
         }
+    }
+
+    /**
+     * After a reconciliation round passed, transactions missing by our peer are known by short ID.
+     * Look up their full wtxid locally to announce them to the peer.
+     */
+    std::vector<uint256> GetWTXIDsFromShortIDs(const std::vector<uint32_t>& remote_missing_short_ids) const
+    {
+        std::vector<uint256> remote_missing;
+        for (const auto& missing_short_id: remote_missing_short_ids) {
+            const auto local_tx = m_short_id_mapping.find(missing_short_id);
+            if (local_tx != m_short_id_mapping.end()) {
+                remote_missing.push_back(local_tx->second);
+            }
+        }
+        return remote_missing;
     }
 
     /**
@@ -480,25 +500,26 @@ private:
             result = std::nullopt;
 
             LogPrint(BCLog::NET, "Reconciliation we initiated with peer=%d has failed at initial step, " /* Continued */
-                "request sketch extension.\n", peer_id);
+                                 "request sketch extension.\n",
+                     peer_id);
         }
         return true;
     }
 
-    bool HandleSketchExtension(ReconciliationState& recon_state, const NodeId peer_id,
+    bool HandleSketchExtension(TxReconciliationState& recon_state, const NodeId peer_id,
                                const std::vector<uint8_t>& skdata,
                                // returning values
                                std::vector<uint32_t>& txs_to_request, std::vector<uint256>& txs_to_announce, std::optional<bool>& result)
     {
         assert(recon_state.m_we_initiate);
-        assert(recon_state.m_state_init_by_us.m_phase == Phase::EXT_REQUESTED);
+        assert(recon_state.m_phase == Phase::EXT_REQUESTED);
 
         std::vector<uint8_t> working_skdata = std::vector<uint8_t>(skdata);
         // A sketch extension is missing the lower elements (to be a valid extended sketch),
         // which we stored on our side at initial reconciliation step.
         working_skdata.insert(working_skdata.begin(),
-                              recon_state.m_state_init_by_us.m_remote_sketch_snapshot.begin(),
-                              recon_state.m_state_init_by_us.m_remote_sketch_snapshot.end());
+                              recon_state.m_remote_sketch_snapshot.begin(),
+                              recon_state.m_remote_sketch_snapshot.end());
 
         // We allow the peer to send an extension for any capacity, not just original capacity * 2,
         // but it should be within the limits. The limits are MAX_SKETCH_CAPACITY * 2, so that
@@ -517,7 +538,7 @@ private:
             // Extension step succeeded.
 
             // Identify locally/remotely missing transactions.
-            recon_state.m_local_set_snapshot.GetRelevantIDsFromShortIDs(differences, txs_to_request, txs_to_announce);
+            recon_state.GetRelevantIDsFromShortIDs(differences, txs_to_request, txs_to_announce, true);
 
             result = true;
             LogPrint(BCLog::NET, "Reconciliation we initiated with peer=%d has succeeded at extension step, " /* Continued */
@@ -529,7 +550,7 @@ private:
             // Announce all local transactions from the reconciliation set.
             // All remote transactions will be announced by peer based on the reconciliation
             // failure flag.
-            txs_to_announce = recon_state.m_local_set_snapshot.GetAllTransactions();
+            txs_to_announce = recon_state.GetAllTransactions(true);
 
             result = false;
             LogPrint(BCLog::NET, "Reconciliation we initiated with peer=%d has failed at extension step, " /* Continued */
@@ -546,7 +567,7 @@ private:
 
         // Update local reconciliation state for the peer.
         recon_state.FinalizeInitByUs(false);
-        recon_state.m_state_init_by_us.m_phase = Phase::NONE;
+        recon_state.m_phase = Phase::NONE;
         return true;
     }
 
