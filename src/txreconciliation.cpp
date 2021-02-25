@@ -65,6 +65,7 @@ enum ReconciliationPhase {
     RECON_NONE,
     RECON_INIT_REQUESTED,
     RECON_INIT_RESPONDED,
+    RECON_EXT_REQUESTED
 };
 
 /**
@@ -94,6 +95,13 @@ struct ReconciliationInitByUs {
      * to better estimate future set size differences.
      */
     double m_local_q{DEFAULT_RECON_Q};
+
+    /**
+     * In a reconciliation round initiated by us, if we asked for an extension, we want to store
+     * the sketch computed/transmitted in the initial step, so that we can use it when
+     * sketch extension arrives.
+     */
+    std::vector<uint8_t> m_remote_sketch_snapshot;
 
     /** Keep track of the reconciliation phase with the peer. */
     ReconciliationPhase m_phase{RECON_NONE};
@@ -214,6 +222,22 @@ class ReconciliationState {
     std::set<uint256> m_local_set;
 
     /**
+     * A reconciliation round may involve an extension, which is an extra exchange of messages.
+     * Since it may happen after a delay (at least network latency), new transactions may come
+     * during that time. To avoid mixing old and new transactions, those which are subject for
+     * extension of a current reconciliation round are moved to a reconciliation set snapshot
+     * after an initial (non-extended) sketch is sent.
+     * New transactions are kept in the regular reconciliation set.
+     */
+    std::set<uint256> m_local_set_snapshot;
+
+    /**
+     * A reconciliation round may involve an extension, in which case we should remember
+     * a capacity of the sketch sent out initially, so that a sketch extension is of the same size.
+     */
+    uint16_t m_capacity_snapshot{0};
+
+    /**
      * Reconciliation sketches are computed over short transaction IDs.
      * This is a cache of these IDs enabling faster lookups of full wtxids,
      * useful when peer will ask for missing transactions by short IDs
@@ -296,6 +320,27 @@ class ReconciliationState {
         assert(m_we_initiate);
         m_state_init_by_us.m_local_q = updated_q;
         if (clear_local_set) m_local_set.clear();
+        // This is currently belt-and-suspenders, as the code should work even without these calls.
+        m_local_set_snapshot.clear();
+        m_capacity_snapshot = 0;
+        m_state_init_by_us.m_remote_sketch_snapshot.clear();
+    }
+
+    /**
+     * To be efficient in transmitting extended sketch, we store a snapshot of the sketch
+     * received in the initial reconciliation step, so that only the necessary extension data
+     * has to be transmitted.
+     * We also store a snapshot of our local reconciliation set, to better keep track of
+     * transactions arriving during this reconciliation (they will be added to the cleared
+     * original reconciliation set, to be reconciled next time).
+     */
+    void PrepareForExtensionResponse(uint16_t sketch_capacity, const std::vector<uint8_t>& remote_sketch)
+    {
+        assert(m_we_initiate);
+        m_capacity_snapshot = sketch_capacity;
+        m_state_init_by_us.m_remote_sketch_snapshot = remote_sketch;
+        m_local_set_snapshot = m_local_set;
+        m_local_set.clear();
     }
 };
 
@@ -491,7 +536,7 @@ class TxReconciliationTracker::Impl {
 
     bool HandleSketch(NodeId peer_id, int common_version, const std::vector<uint8_t>& skdata,
         // returning values
-        std::vector<uint32_t>& txs_to_request, std::vector<uint256>& txs_to_announce, bool& result)
+        std::vector<uint32_t>& txs_to_request, std::vector<uint256>& txs_to_announce, std::optional<bool>& result)
     {
         // Protocol violation: our peer exceeded the sketch capacity, or sent a malformed sketch.
         if (skdata.size() / BYTES_PER_SKETCH_CAPACITY > MAX_SKETCH_CAPACITY) {
@@ -548,9 +593,14 @@ class TxReconciliationTracker::Impl {
             recon_state->second.m_state_init_by_us.m_phase = RECON_NONE;
             result = true;
         } else {
-            // Reconciliation over the current working sketch failed.
-            // TODO handle failure.
-            result = false;
+            // Initial reconciliation failed.
+            LogPrint(BCLog::NET, "Outgoing reconciliation initially failed, requesting extension sketch\n");
+
+            // Store the received sketch and the local sketch, request extension.
+            recon_state->second.m_state_init_by_us.m_phase = RECON_EXT_REQUESTED;
+            recon_state->second.PrepareForExtensionResponse(remote_sketch_capacity, skdata);
+            result = std::nullopt;
+            return true;
         }
         return true;
     }
@@ -640,7 +690,7 @@ bool TxReconciliationTracker::RespondToReconciliationRequest(NodeId peer_id, std
 }
 
 bool TxReconciliationTracker::HandleSketch(NodeId peer_id, int common_version, const std::vector<uint8_t>& skdata,
-    std::vector<uint32_t>& txs_to_request, std::vector<uint256>& txs_to_announce, bool& result)
+    std::vector<uint32_t>& txs_to_request, std::vector<uint256>& txs_to_announce, std::optional<bool>& result)
 {
     return m_impl->HandleSketch(peer_id, common_version, skdata, txs_to_request, txs_to_announce, result);
 }
