@@ -330,6 +330,11 @@ private:
     void AddTxAnnouncement(const CNode& node, const GenTxid& gtxid, std::chrono::microseconds current_time)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    /**
+     * Return the number of outbound peers we (may possibly) relay transactions to via flooding.
+     */
+    size_t GetFloodingOutboundsCount() const;
+
     /** Send a version message to a peer */
     void PushNodeVersion(CNode& pnode, int64_t nTime);
 
@@ -959,6 +964,27 @@ void PeerManagerImpl::AddTxAnnouncement(const CNode& node, const GenTxid& gtxid,
         m_txrequest.CountInFlight(nodeid) >= MAX_PEER_TX_REQUEST_IN_FLIGHT;
     if (overloaded) delay += OVERLOADED_PEER_TX_DELAY;
     m_txrequest.ReceivedInv(nodeid, gtxid, preferred, current_time + delay);
+}
+
+size_t PeerManagerImpl::GetFloodingOutboundsCount() const
+{
+    size_t result = 0;
+    m_connman.ForEachNode([this, &result](const CNode* pnode) {
+        if (!pnode->fSuccessfullyConnected) return;
+        if (!pnode->m_tx_relay) return;
+        if (!pnode->MightSupportTransactionRelay(false)) return;
+
+        if (m_reconciliation.IsPeerRegistered(pnode->GetId())) {
+            if (*m_reconciliation.IsPeerChosenForFlooding(pnode->GetId())) {
+                ++result;
+            }
+        } else {
+            // Nodes not supporting reconciliation are definitely meant for flooding,
+            // unless they don’t support tx relay, which is already checked above.
+            ++result;
+        }
+    });
+    return result;
 }
 
 // This function is used for testing the stale tip eviction logic, see
@@ -2884,8 +2910,10 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         uint64_t remote_salt;
         vRecv >> they_initiator >> they_responder >> recon_version >> remote_salt;
 
+        // Since this is called before VERACK, GetFloodingOutboundsCount() doesn't include this peer
+        // being considered for reconciliation support, so no need for substraction.
         m_reconciliation.EnableReconciliationSupport(pfrom.GetId(), pfrom.IsInboundConn(),
-            they_initiator, they_responder, recon_version, remote_salt);
+            they_initiator, they_responder, recon_version, remote_salt, GetFloodingOutboundsCount());
         return;
     }
 

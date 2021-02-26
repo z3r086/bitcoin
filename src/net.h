@@ -481,12 +481,16 @@ public:
      * If this peer can possibly participate in transaction relay based on its connection type,
      * return true.
      */
-    bool MightSupportTransactionRelay() const {
+    bool MightSupportTransactionRelay(bool include_inbounds=true) const {
         switch (m_conn_type) {
             case ConnectionType::OUTBOUND_FULL_RELAY:
-            case ConnectionType::INBOUND:
             case ConnectionType::MANUAL:
                 return true;
+            case ConnectionType::INBOUND:
+                // Currently, we think all inbound connections can be used for
+                // transaction relay, so it's up to a caller whether they want
+                // to count them.
+                return include_inbounds;
             case ConnectionType::BLOCK_RELAY:
             case ConnectionType::ADDR_FETCH:
             case ConnectionType::FEELER:

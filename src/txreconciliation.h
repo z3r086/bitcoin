@@ -40,12 +40,14 @@ class TxReconciliationTracker {
 
     /**
      * Start tracking state of reconciliation with the peer, and add it to the reconciliation
-     * queue if it is an outbound connection.
+     * queue if it is an outbound connection. Decide whether we should flood (certain) transactions
+     * to the peer based on the number of existing outbound flood connections.
      * Should be called only after SuggestReconciling for the same peer and only once.
      * Returns false if a peer seems to violate the protocol rules.
      */
     bool EnableReconciliationSupport(const NodeId peer_id, bool inbound,
-        bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt);
+        bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt,
+        size_t outbound_flooders);
 
     /**
      * Check if peer is registered to perform reconciliations with.
