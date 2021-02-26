@@ -37,6 +37,16 @@ class TxReconciliationTracker {
      * A peer can't be registered for future reconciliations without this call.
      */
     std::tuple<bool, bool, uint32_t, uint64_t> SuggestReconciling(const NodeId peer_id, bool inbound);
+
+    /**
+     * Start tracking state of reconciliation with the peer, and add it to the reconciliation
+     * queue if it is an outbound connection.
+     * Should be called only after SuggestReconciling for the same peer and only once.
+     * Returns false if a peer seems to violate the protocol rules.
+     */
+    bool EnableReconciliationSupport(const NodeId peer_id, bool inbound,
+        bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt);
+
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
