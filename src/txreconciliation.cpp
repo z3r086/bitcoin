@@ -74,6 +74,20 @@ uint256 ComputeSalt(uint64_t local_salt, uint64_t remote_salt)
 }
 
 /**
+ * TODO: comment
+ */
+std::optional<std::pair<Minisketch, uint16_t>> ParseRemoteSketch(const std::vector<uint8_t>& skdata)
+{
+    uint16_t remote_sketch_capacity = uint16_t(skdata.size() / BYTES_PER_SKETCH_CAPACITY);
+    if (remote_sketch_capacity != 0) {
+        Minisketch remote_sketch = Minisketch(RECON_FIELD_SIZE, 0, remote_sketch_capacity).Deserialize(skdata);
+        return std::make_pair(remote_sketch, remote_sketch_capacity);
+    } else {
+        return std::nullopt;
+    }
+}
+
+/**
  * This struct is used to keep track of the reconciliations with a given peer,
  * and also short transaction IDs for the next reconciliation round.
  * Transaction reconciliation means an efficient synchronization of the known
