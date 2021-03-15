@@ -136,6 +136,24 @@ struct ReconciliationInitByThem {
 };
 
 /**
+ * After a reconciliation round is over, the local q coefficient may be adjusted to enable
+ * better accuracy of future set difference estimations.
+ */
+double RecomputeQ(uint8_t local_set_size, uint8_t actual_local_missing, uint8_t actual_remote_missing)
+{
+    uint8_t remote_set_size = local_set_size + actual_local_missing - actual_remote_missing;
+    uint8_t set_size_diff = std::abs(local_set_size - remote_set_size);
+    uint8_t min_size = std::min(local_set_size, remote_set_size);
+    uint8_t actual_difference = actual_local_missing + actual_remote_missing;
+    if (min_size != 0) {
+        double result = double(actual_difference - set_size_diff) / min_size;
+        assert(result >= 0 && result <= 2);
+        return result;
+    }
+    return DEFAULT_RECON_Q;
+}
+
+/**
  * Used to keep track of the ongoing reconciliations, the transactions we want to announce to the
  * peer when next transaction reconciliation happens, and also all parameters required to perform
  * reconciliations.
