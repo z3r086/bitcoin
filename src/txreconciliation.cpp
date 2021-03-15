@@ -88,6 +88,30 @@ std::optional<std::pair<Minisketch, uint16_t>> ParseRemoteSketch(const std::vect
 }
 
 /**
+ * After a reconciliation round is over, the local q coefficient may be adjusted to enable
+ * better accuracy of future set difference estimations.
+ * Recompute q in case of full reconciliation success (both initially or after extension).
+ * In case reconciliation completely failed (initial and extension), fallback to the default q,
+ * set to cause an overestimation, but should converge to the reasonable q in the next round.
+ * Note that accurate recompute in case of complete failure is difficult,
+ * because it requires waiting for GETDATA/INV the peer would send to us, and find
+ * the actual difference from there (also may be inaccurate due to the latencies).
+ */
+double RecomputeQ(uint8_t local_set_size, uint8_t actual_local_missing, uint8_t actual_remote_missing)
+{
+    const uint8_t remote_set_size = local_set_size + actual_local_missing - actual_remote_missing;
+    const uint8_t set_size_diff = std::abs(local_set_size - remote_set_size);
+    const uint8_t min_size = std::min(local_set_size, remote_set_size);
+    const uint8_t actual_difference = actual_local_missing + actual_remote_missing;
+    if (min_size != 0) {
+        double result = double(actual_difference - set_size_diff) / min_size;
+        assert(result >= 0 && result <= 2);
+        return result;
+    }
+    return DEFAULT_RECON_Q;
+}
+
+/**
  * This struct is used to keep track of the reconciliations with a given peer,
  * and also short transaction IDs for the next reconciliation round.
  * Transaction reconciliation means an efficient synchronization of the known
