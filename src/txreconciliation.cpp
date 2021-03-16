@@ -345,6 +345,22 @@ class ReconciliationState {
         m_local_short_id_mapping.clear();
         // This is currently belt-and-suspenders, as the code should work even without these calls.
         m_local_set_snapshot.clear();
+        m_capacity_snapshot = 0;
+    }
+
+    /**
+     * Once we are fully done with the outgoing reconciliation, prepare the state for the following
+     * reconciliations in the same direction.
+     */
+    void FinalizeOutgoingReconciliation(bool clear_local_set, double updated_q)
+    {
+        assert(m_we_initiate);
+        m_local_q = updated_q;
+        if (clear_local_set) m_local_set.clear();
+        // This is currently belt-and-suspenders, as the code should work even without these calls.
+        m_local_set_snapshot.clear();
+        m_capacity_snapshot = 0;
+        m_remote_sketch_snapshot.clear();
     }
 
     /**
@@ -365,6 +381,20 @@ class ReconciliationState {
             }
         }
         return std::make_pair(local_missing, remote_missing);
+    }
+
+    /**
+     * TODO document
+     */
+    void PrepareForExtensionRequest(uint16_t sketch_capacity)
+    {
+        // Be ready to respond to extension request, to compute the extended sketch over
+        // the same initial set (without transactions received during the reconciliation).
+        // Allow to store new transactions separately in the original set.
+        assert(!m_we_initiate);
+        m_capacity_snapshot = sketch_capacity;
+        m_local_set_snapshot = m_local_set;
+        m_local_set.clear();
     }
 
     /**
