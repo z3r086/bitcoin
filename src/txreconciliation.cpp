@@ -10,12 +10,35 @@ namespace {
 constexpr uint32_t RECON_VERSION = 1;
 /** Static component of the salt used to compute short txids for inclusion in sketches. */
 const std::string RECON_STATIC_SALT = "Tx Relay Salting";
+/** Default value for the coefficient used to estimate reconciliation set differences. */
+constexpr double DEFAULT_RECON_Q = 0.02;
+/**
+  * Used to convert a floating point reconciliation coefficient q to integer for transmission.
+  * Specified by BIP-330.
+  */
+constexpr uint16_t Q_PRECISION{(2 << 14) - 1};
 /**
  * When considering whether we should flood to an outbound connection supporting reconciliation,
  * see how many outbound connections are already used for flooding. Flood only if the limit is not reached.
  * It helps to save bandwidth and reduce the privacy leak.
  */
 constexpr uint32_t MAX_OUTBOUND_FLOOD_TO = 8;
+/**
+ * Interval between initiating reconciliations with a given peer.
+ * This value allows to reconcile ~100 transactions (7 tx/s * 16s) during normal system operation.
+ * More frequent reconciliations would cause significant constant bandwidth overhead
+ * due to reconciliation metadata (sketch sizes etc.), which would nullify the efficiency.
+ * Less frequent reconciliations would introduce high transaction relay latency.
+ */
+constexpr std::chrono::microseconds RECON_REQUEST_INTERVAL{16s};
+
+/**
+ * Represents phase of the current reconciliation round with a peer.
+ */
+enum ReconciliationPhase {
+    RECON_NONE,
+    RECON_INIT_REQUESTED,
+};
 
 /**
  * Salt is specified by BIP-330 is constructed from contributions from both peers. It is later used
@@ -29,6 +52,25 @@ uint256 ComputeSalt(uint64_t local_salt, uint64_t remote_salt)
     static const auto RECON_SALT_HASHER = TaggedHash(RECON_STATIC_SALT);
     return (CHashWriter(RECON_SALT_HASHER) << salt1 << salt2).GetSHA256();
 }
+
+/**
+ * Track ongoing reconciliations with a giving peer which were initiated by us.
+ */
+struct ReconciliationInitByUs {
+    /**
+     * Computing a set reconciliation sketch involves estimating the difference
+     * between sets of transactions on two sides of the connection. More specifically,
+     * a sketch capacity is computed as
+     * |set_size - local_set_size| + q * (set_size + local_set_size) + c,
+     * where c is a small constant, and q is a node+connection-specific coefficient.
+     * This coefficient is recomputed by every node based on the previous reconciliations,
+     * to better estimate future set size differences.
+     */
+    double m_local_q{DEFAULT_RECON_Q};
+
+    /** Keep track of the reconciliation phase with the peer. */
+    ReconciliationPhase m_phase{RECON_NONE};
+};
 
 /**
  * Used to keep track of the ongoing reconciliations, the transactions we want to announce to the
@@ -71,6 +113,9 @@ class ReconciliationState {
      */
     std::set<uint256> m_local_set;
 
+    /** Keep track of reconciliations with the peer. */
+    ReconciliationInitByUs m_state_init_by_us;
+
     ReconciliationState(bool we_initiate, bool flood_to, uint64_t k0, uint64_t k1) :
         m_we_initiate(we_initiate), m_flood_to(flood_to),
         m_k0(k0), m_k1(k1) {}
@@ -103,6 +148,16 @@ class TxReconciliationTracker::Impl {
      * easier to estimate set differene size.
      */
     std::deque<NodeId> m_queue GUARDED_BY(m_mutex);
+
+    /**
+     * Reconciliations are requested periodically:
+     * every RECON_REQUEST_INTERVAL seconds we pick a peer from the queue.
+     */
+    std::chrono::microseconds m_next_recon_request{0};
+    void UpdateNextReconRequest(std::chrono::microseconds now) EXCLUSIVE_LOCKS_REQUIRED(m_mutex)
+    {
+        m_next_recon_request = now + RECON_REQUEST_INTERVAL / m_queue.size();
+    }
 
     public:
 
@@ -173,6 +228,30 @@ class TxReconciliationTracker::Impl {
         }
     }
 
+    std::optional<std::pair<uint16_t, uint16_t>> MaybeRequestReconciliation(const NodeId peer_id)
+    {
+        LOCK(m_mutex);
+        auto recon_state = m_states.find(peer_id);
+        if (recon_state == m_states.end()) return std::nullopt;
+        if (recon_state->second.m_state_init_by_us.m_phase != RECON_NONE) return std::nullopt;
+
+        if (m_queue.size() > 0) {
+            // Request transaction reconciliation periodically to efficiently exchange transactions.
+            // To make reconciliation predictable and efficient, we reconcile with peers in order based on the queue,
+            // and with a delay between requests.
+            auto current_time = GetTime<std::chrono::seconds>();
+            if (m_next_recon_request < current_time && m_queue.back() == peer_id) {
+                recon_state->second.m_state_init_by_us.m_phase = RECON_INIT_REQUESTED;
+                m_queue.pop_back();
+                m_queue.push_front(peer_id);
+                UpdateNextReconRequest(current_time);
+                return std::make_pair(recon_state->second.m_local_set.size(),
+                    recon_state->second.m_state_init_by_us.m_local_q * Q_PRECISION);
+            }
+        }
+        return std::nullopt;
+    }
+
     void RemovePeer(NodeId peer_id)
     {
         LOCK(m_mutex);
@@ -240,6 +319,11 @@ bool TxReconciliationTracker::EnableReconciliationSupport(NodeId peer_id, bool i
 void TxReconciliationTracker::StoreTxsToAnnounce(NodeId peer_id, const std::vector<uint256>& txs_to_reconcile)
 {
     m_impl->StoreTxsToAnnounce(peer_id, txs_to_reconcile);
+}
+
+std::optional<std::pair<uint16_t, uint16_t>> TxReconciliationTracker::MaybeRequestReconciliation(NodeId peer_id)
+{
+    return m_impl->MaybeRequestReconciliation(peer_id);
 }
 
 void TxReconciliationTracker::RemovePeer(NodeId peer_id)
