@@ -65,6 +65,12 @@ class TxReconciliationTracker {
      * Removes any reconciliation-related state/notion of the peer.
      */
     void RemovePeer(const NodeId peer_id);
+
+    /**
+     * Returns whether a given peer might respond to our reconciliation requests.
+     * If the peer was not previously registered for reconciliations, returns nullopt.
+     */
+    std::optional<bool> IsPeerResponder(const NodeId peer_id) const;
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H

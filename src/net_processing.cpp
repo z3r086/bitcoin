@@ -265,7 +265,7 @@ public:
     bool GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) override;
     bool IgnoresIncomingTxs() override { return m_ignore_incoming_txs; }
     void SendPings() override;
-    void RelayTransaction(const uint256& txid, const uint256& wtxid) EXCLUSIVE_LOCKS_REQUIRED(cs_main) override;
+    void RelayTransaction(const uint256& txid, const uint256& wtxid, CNode* pfrom) EXCLUSIVE_LOCKS_REQUIRED(cs_main) override;
     void SetBestHeight(int height) override { m_best_height = height; };
     void Misbehaving(const NodeId pnode, const int howmuch, const std::string& message) override;
     void ProcessMessage(CNode& pfrom, const std::string& msg_type, CDataStream& vRecv,
@@ -1026,7 +1026,7 @@ void PeerManagerImpl::ReattemptInitialBroadcast(CScheduler& scheduler)
 
         if (tx != nullptr) {
             LOCK(cs_main);
-            RelayTransaction(txid, tx->GetWitnessHash());
+            RelayTransaction(txid, tx->GetWitnessHash(), nullptr);
         } else {
             m_mempool.RemoveUnbroadcastTx(txid, true);
         }
@@ -1690,17 +1690,35 @@ void PeerManagerImpl::SendPings()
     for(auto& it : m_peer_map) it.second->m_ping_queued = true;
 }
 
-void PeerManagerImpl::RelayTransaction(const uint256& txid, const uint256& wtxid)
+void PeerManagerImpl::RelayTransaction(const uint256& txid, const uint256& wtxid, CNode* pfrom)
 {
-    m_connman.ForEachNode([&txid, &wtxid](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+    bool flood;
+    if (pfrom) {
+        // Flood those transactions which were received either from pre-reconciliation peers, or
+        // inbound reconciliation but NOT via outbound reconciliation. Flooding then is mainly
+        // used for initial propagation of new transactions across a network of reachable nodes
+        // quickly.
+        if (m_reconciliation.IsPeerRegistered(pfrom->GetId())) {
+            flood = !(*m_reconciliation.IsPeerResponder(pfrom->GetId()));
+        } else {
+            flood = true;
+        }
+    }
+    else {
+        // Transactions from self should be always announced through reconciliation.
+        flood = false;
+    }
+
+    m_connman.ForEachNode([&txid, &wtxid, flood](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
         AssertLockHeld(::cs_main);
 
         CNodeState* state = State(pnode->GetId());
         if (state == nullptr) return;
         if (state->m_wtxid_relay) {
-            pnode->PushTxInventory(wtxid);
+            pnode->PushTxInventory(wtxid, flood);
         } else {
-            pnode->PushTxInventory(txid);
+            // Reconciliations are not supported for non-wtxid peers, so we always use flooding.
+            pnode->PushTxInventory(txid, true);
         }
     });
 }
@@ -2277,7 +2295,7 @@ void PeerManagerImpl::ProcessOrphanTx(const CNode& pnode)
 
         if (result.m_result_type == MempoolAcceptResult::ResultType::VALID) {
             LogPrint(BCLog::MEMPOOL, "   accepted orphan tx %s\n", orphanHash.ToString());
-            RelayTransaction(orphanHash, porphanTx->GetWitnessHash());
+            RelayTransaction(orphanHash, porphanTx->GetWitnessHash(), nullptr);
             for (unsigned int i = 0; i < porphanTx->vout.size(); i++) {
                 auto it_by_prev = mapOrphanTransactionsByPrev.find(COutPoint(orphanHash, i));
                 if (it_by_prev != mapOrphanTransactionsByPrev.end()) {
@@ -3335,7 +3353,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
                     LogPrintf("Not relaying non-mempool transaction %s from forcerelay peer=%d\n", tx.GetHash().ToString(), pfrom.GetId());
                 } else {
                     LogPrintf("Force relaying tx %s from peer=%d\n", tx.GetHash().ToString(), pfrom.GetId());
-                    RelayTransaction(tx.GetHash(), tx.GetWitnessHash());
+                    RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), &pfrom);
                 }
             }
             return;
@@ -3350,7 +3368,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             // requests for it.
             m_txrequest.ForgetTxHash(tx.GetHash());
             m_txrequest.ForgetTxHash(tx.GetWitnessHash());
-            RelayTransaction(tx.GetHash(), tx.GetWitnessHash());
+            RelayTransaction(tx.GetHash(), tx.GetWitnessHash(), &pfrom);
             for (unsigned int i = 0; i < tx.vout.size(); i++) {
                 auto it_by_prev = mapOrphanTransactionsByPrev.find(COutPoint(txid, i));
                 if (it_by_prev != mapOrphanTransactionsByPrev.end()) {

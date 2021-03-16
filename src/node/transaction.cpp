@@ -100,7 +100,7 @@ TransactionError BroadcastTransaction(NodeContext& node, const CTransactionRef t
         node.mempool->AddUnbroadcastTx(hashTx);
 
         LOCK(cs_main);
-        node.peerman->RelayTransaction(hashTx, tx->GetWitnessHash());
+        node.peerman->RelayTransaction(hashTx, tx->GetWitnessHash(), nullptr);
     }
 
     return TransactionError::OK;

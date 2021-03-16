@@ -52,7 +52,7 @@ public:
     virtual void SendPings() = 0;
 
     /** Relay transaction to every node */
-    virtual void RelayTransaction(const uint256& txid, const uint256& wtxid) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
+    virtual void RelayTransaction(const uint256& txid, const uint256& wtxid, CNode* pfrom) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
 
     /** Set the best height */
     virtual void SetBestHeight(int height) = 0;
