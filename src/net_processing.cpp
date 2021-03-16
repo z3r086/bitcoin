@@ -317,7 +317,7 @@ private:
      */
     bool MaybeDiscourageAndDisconnect(CNode& pnode, Peer& peer);
 
-    void ProcessOrphanTx(std::set<uint256>& orphan_work_set) EXCLUSIVE_LOCKS_REQUIRED(cs_main, g_cs_orphans);
+    void ProcessOrphanTx(const CNode& pnode) EXCLUSIVE_LOCKS_REQUIRED(cs_main, g_cs_orphans);
     /** Process a single headers message from a peer. */
     void ProcessHeadersMessage(CNode& pfrom, const Peer& peer,
                                const std::vector<CBlockHeader>& headers,
@@ -2238,10 +2238,14 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, const Peer& peer,
  *                                  may be added to if accepting an orphan causes its children to be
  *                                  reconsidered.
  */
-void PeerManagerImpl::ProcessOrphanTx(std::set<uint256>& orphan_work_set)
+void PeerManagerImpl::ProcessOrphanTx(const CNode& pnode)
 {
     AssertLockHeld(cs_main);
     AssertLockHeld(g_cs_orphans);
+
+    PeerRef peer = GetPeerRef(pnode.GetId());
+    assert(peer);
+    auto orphan_work_set = peer->m_orphan_work_set;
 
     while (!orphan_work_set.empty()) {
         const uint256 orphanHash = *orphan_work_set.begin();
@@ -3375,7 +3379,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             }
 
             // Recursively process any orphan transactions that depended on this one
-            ProcessOrphanTx(peer->m_orphan_work_set);
+            ProcessOrphanTx(pfrom);
         }
         else if (state.GetResult() == TxValidationResult::TX_MISSING_INPUTS)
         {
@@ -4168,7 +4172,7 @@ bool PeerManagerImpl::ProcessMessages(CNode* pfrom, std::atomic<bool>& interrupt
     {
         LOCK2(cs_main, g_cs_orphans);
         if (!peer->m_orphan_work_set.empty()) {
-            ProcessOrphanTx(peer->m_orphan_work_set);
+            ProcessOrphanTx(*pfrom);
         }
     }
 
