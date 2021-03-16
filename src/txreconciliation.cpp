@@ -64,7 +64,8 @@ enum ReconciliationPhase {
     RECON_NONE,
     RECON_INIT_REQUESTED,
     RECON_INIT_RESPONDED,
-    RECON_EXT_REQUESTED
+    RECON_EXT_REQUESTED,
+    RECON_EXT_RESPONDED
 };
 
 /**
@@ -632,16 +633,32 @@ class TxReconciliationTracker::Impl {
 
         auto incoming_phase = recon_state->second.m_incoming_recon;
         bool timely_initial_request = incoming_phase == RECON_INIT_REQUESTED && current_time > recon_state->second.m_next_recon_respond;
-        if (!timely_initial_request) {
+        bool extension_request = incoming_phase == RECON_EXT_REQUESTED;
+        if (!timely_initial_request && !extension_request) {
             return std::nullopt;
         }
 
         std::vector<unsigned char> response_skdata;
-        uint16_t sketch_capacity = recon_state->second.EstimateSketchCapacity();
-        Minisketch sketch = recon_state->second.GetLocalBaseSketch(sketch_capacity);
-        recon_state->second.m_incoming_recon = RECON_INIT_RESPONDED;
-        recon_state->second.PrepareForExtensionRequest(sketch_capacity);
-        if (sketch) response_skdata = sketch.Serialize();
+        Minisketch sketch;
+        if (timely_initial_request) {
+            uint16_t sketch_capacity = recon_state->second.EstimateSketchCapacity();
+            sketch = recon_state->second.GetLocalBaseSketch(sketch_capacity);
+            recon_state->second.m_incoming_recon = RECON_INIT_RESPONDED;
+            recon_state->second.PrepareForExtensionRequest(sketch_capacity);
+            if (sketch) response_skdata = sketch.Serialize();
+        } else {
+            sketch = recon_state->second.GetLocalExtendedSketch();
+            recon_state->second.m_incoming_recon = RECON_EXT_RESPONDED;
+            // Local extension sketch can be null only if initial sketch or initial capacity was 0,
+            // in which case we would have terminated reconciliation already.
+            assert(sketch);
+            response_skdata = sketch.Serialize();
+            // For the sketch extension, send only the higher sketch elements.
+            size_t lower_bytes_to_drop = recon_state->second.m_capacity_snapshot * BYTES_PER_SKETCH_CAPACITY;
+            // Extended sketch is twice the size of the initial sketch (which is m_capacity_snapshot).
+            assert(lower_bytes_to_drop <= response_skdata.size());
+            response_skdata.erase(response_skdata.begin(), response_skdata.begin() + lower_bytes_to_drop);
+        }
         return response_skdata;
     }
 
