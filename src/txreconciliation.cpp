@@ -12,12 +12,32 @@ constexpr uint32_t RECON_VERSION = 1;
 const std::string RECON_STATIC_SALT = "Tx Relay Salting";
 /** Default coefficient used to estimate set difference for tx reconciliation. */
 constexpr double DEFAULT_RECON_Q = 0.02;
+/** Used to convert a floating point reconciliation coefficient q to an int for transmission.
+  * Specified by BIP-330.
+  */
+constexpr uint16_t Q_PRECISION{(2 << 14) - 1};
 /**
  * When considering whether we should flood to an outbound connection supporting reconciliation,
  * see how many outbound connections are already used for flooding. Flood only if the limit is not reached.
  * It helps to save bandwidth and reduce the privacy leak.
  */
 constexpr uint32_t MAX_OUTBOUND_FLOOD_TO = 8;
+/**
+ * Interval between sending reconciliation request to the same peer.
+ * This value allows to reconcile ~100 transactions (7 tx/s * 16s) during normal system operation
+ * at capacity. More frequent reconciliations would cause significant constant bandwidth overhead
+ * due to reconciliation metadata (sketch sizes etc.), which would nullify the efficiency.
+ * Less frequent reconciliations would introduce high transaction relay latency.
+ */
+constexpr std::chrono::microseconds RECON_REQUEST_INTERVAL{16s};
+
+/**
+ * Represents phase of the current reconciliation round with a peer.
+ */
+enum ReconciliationPhase {
+    RECON_NONE,
+    RECON_INIT_REQUESTED,
+};
 
 /**
  * A salt is specified by BIP-330 is constructed from contributions from both peers, and is later
@@ -97,6 +117,9 @@ class ReconciliationState {
      */
     std::set<uint256> m_local_set;
 
+    /** Keep track of reconciliations with the peer. */
+    ReconciliationPhase m_outgoing_recon{RECON_NONE};
+
     public:
 
     ReconciliationState(bool we_initiate, bool flood_to, uint64_t k0, uint64_t k1) :
@@ -131,6 +154,16 @@ class TxReconciliationTracker::Impl {
      * order of peers chosen for reconciliation.
      */
     std::deque<NodeId> m_queue GUARDED_BY(m_mutex);
+
+    /**
+     * Reconciliations are requested periodically:
+     * every RECON_REQUEST_INTERVAL seconds we pick a peer from the queue.
+     */
+    std::chrono::microseconds m_next_recon_request{0};
+    void UpdateNextReconRequest(std::chrono::microseconds now) EXCLUSIVE_LOCKS_REQUIRED(m_mutex)
+    {
+        m_next_recon_request = now + RECON_REQUEST_INTERVAL / m_queue.size();
+    }
 
     public:
 
@@ -247,6 +280,29 @@ class TxReconciliationTracker::Impl {
         }
     }
 
+    std::optional<std::pair<uint16_t, uint16_t>> MaybeRequestReconciliation(const NodeId peer_id)
+    {
+        LOCK(m_mutex);
+        auto recon_state = m_states.find(peer_id);
+        if (recon_state == m_states.end()) return std::nullopt;
+        if (recon_state->second.m_outgoing_recon != RECON_NONE) return std::nullopt;
+
+        if (m_queue.size() > 0) {
+            // Request transaction reconciliation periodically to efficiently exchange transactions.
+            // To make reconciliation predictable and efficient, we reconcile with peers in order based on the queue,
+            // and with a delay between requests.
+            auto current_time = GetTime<std::chrono::seconds>();
+            if (m_next_recon_request < current_time && m_queue.back() == peer_id) {
+                recon_state->second.m_outgoing_recon = RECON_INIT_REQUESTED;
+                m_queue.pop_back();
+                m_queue.push_front(peer_id);
+                UpdateNextReconRequest(current_time);
+                return std::make_pair(recon_state->second.m_local_set.size(), recon_state->second.m_local_q * Q_PRECISION);
+            }
+        }
+        return std::nullopt;
+    }
+
 };
 
 TxReconciliationTracker::TxReconciliationTracker() :
@@ -295,4 +351,9 @@ std::optional<size_t> TxReconciliationTracker::GetPeerSetSize(const NodeId peer_
 void TxReconciliationTracker::StoreTxsToAnnounce(const NodeId peer_id, const std::vector<uint256>& txs_to_reconcile)
 {
     m_impl->StoreTxsToAnnounce(peer_id, txs_to_reconcile);
+}
+
+std::optional<std::pair<uint16_t, uint16_t>> TxReconciliationTracker::MaybeRequestReconciliation(const NodeId peer_id)
+{
+    return m_impl->MaybeRequestReconciliation(peer_id);
 }

@@ -83,6 +83,13 @@ class TxReconciliationTracker {
      * peer, so that those transactions will be reconciled later.
      */
     void StoreTxsToAnnounce(const NodeId peer_id, const std::vector<uint256>& txs_to_reconcile);
+
+    /**
+     * If a it's time to request a reconciliation from the peer, this function will return the
+     * details of our local state, which should be communicated to the peer so that they better
+     * know what we need.
+     */
+    std::optional<std::pair<uint16_t, uint16_t>> MaybeRequestReconciliation(const NodeId peer_id);
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
