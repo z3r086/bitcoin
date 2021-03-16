@@ -47,6 +47,10 @@ class TxReconciliationTracker {
     bool EnableReconciliationSupport(const NodeId peer_id, bool inbound,
         bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt);
 
+    /**
+     * Check if peer is registered to perform reconciliations with.
+     */
+    bool IsPeerRegistered(const NodeId peer_id) const;
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
