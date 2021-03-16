@@ -63,6 +63,14 @@ class ReconciliationState {
      */
     const uint64_t m_k0, m_k1;
 
+    /**
+     * Store all transactions which we would relay to the peer (policy checks passed, etc.)
+     * in this set instead of announcing them right away. When reconciliation time comes, we will
+     * compute an efficient representation of this set ("sketch") and use it to efficient reconcile
+     * this set with a similar set on the other side of the connection.
+     */
+    std::set<uint256> m_local_set;
+
     ReconciliationState(bool we_initiate, bool flood_to, uint64_t k0, uint64_t k1) :
         m_we_initiate(we_initiate), m_flood_to(flood_to),
         m_k0(k0), m_k1(k1) {}
@@ -144,6 +152,16 @@ class TxReconciliationTracker::Impl {
         return true;
     }
 
+    void StoreTxsToAnnounce(NodeId peer_id, const std::vector<uint256>& txs_to_reconcile)
+    {
+        LOCK(m_mutex);
+        auto recon_state = m_states.find(peer_id);
+        assert(recon_state != m_states.end());
+        for (auto& wtxid: txs_to_reconcile) {
+            recon_state->second.m_local_set.insert(wtxid);
+        }
+    }
+
     void RemovePeer(NodeId peer_id)
     {
         LOCK(m_mutex);
@@ -176,6 +194,17 @@ class TxReconciliationTracker::Impl {
         }
         return (*recon_state).second.m_we_initiate;
     }
+
+    std::optional<size_t> GetPeerSetSize(NodeId peer_id) const
+    {
+        LOCK(m_mutex);
+        auto recon_state = m_states.find(peer_id);
+        if (recon_state == m_states.end()) {
+            return std::nullopt;
+        }
+        return (*recon_state).second.m_local_set.size();
+    }
+
 };
 
 TxReconciliationTracker::TxReconciliationTracker() :
@@ -196,6 +225,11 @@ bool TxReconciliationTracker::EnableReconciliationSupport(NodeId peer_id, bool i
         recon_version, remote_salt, outbound_flooders);
 }
 
+void TxReconciliationTracker::StoreTxsToAnnounce(NodeId peer_id, const std::vector<uint256>& txs_to_reconcile)
+{
+    m_impl->StoreTxsToAnnounce(peer_id, txs_to_reconcile);
+}
+
 void TxReconciliationTracker::RemovePeer(NodeId peer_id)
 {
     m_impl->RemovePeer(peer_id);
@@ -214,4 +248,9 @@ std::optional<bool> TxReconciliationTracker::IsPeerChosenForFlooding(NodeId peer
 std::optional<bool> TxReconciliationTracker::IsPeerResponder(NodeId peer_id) const
 {
     return m_impl->IsPeerResponder(peer_id);
+}
+
+std::optional<size_t> TxReconciliationTracker::GetPeerSetSize(NodeId peer_id) const
+{
+    return m_impl->GetPeerSetSize(peer_id);
 }
