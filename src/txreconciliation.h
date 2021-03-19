@@ -53,6 +53,18 @@ class TxReconciliationTracker {
      */
     std::tuple<bool, bool, uint32_t, uint64_t> SuggestReconciling(NodeId peer_id, bool inbound);
 
+    /**
+     * Step 0. Once the peer agreed to reconcile with us, generate the data structures required
+     * to track transactions we are going to announce and reconciliation-related parameters.
+     * At this point, we decide whether we want to also flood certain transactions to the peer
+     * along with reconciliations.
+     * Add the peer to the queue if we are going to be the reconciliation initiator.
+     * Should be called only after SuggestReconciling for the same peer and only once.
+     * Returns false if a peer seems to violate the protocol rules.
+     */
+    bool EnableReconciliationSupport(NodeId peer_id, bool inbound,
+        bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt);
+
     // Helpers
 
     /**
@@ -60,6 +72,7 @@ class TxReconciliationTracker {
      * with the peer unless it's registered again (see Step 0).
      */
     void RemovePeer(NodeId peer_id);
+
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
