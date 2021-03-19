@@ -40,8 +40,10 @@ class TxReconciliationTracker {
     ~TxReconciliationTracker();
 
     /**
-     * Step 0. Generates (and stores) a peer-specific salt which will be used for reconciliations.
-     * Reconciliation roles (requestor/responder) based on inbound/outbound role in the connection.
+     * Step 0. Generate and pass reconciliation parameters to be sent along with the suggestion
+     * to announce transactions via reconciliations.
+     * Generates (and stores) a peer-specific salt which will be used for reconciliations.
+     * Reconciliation roles are based on inbound/outbound role in the connection.
      * Returns the following values which will be used to invite a peer to reconcile:
      * - whether we want to initiate reconciliation requests (ask for sketches)
      * - whether we agree to respond to reconciliation requests (send our sketches)
