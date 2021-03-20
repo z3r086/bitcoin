@@ -642,6 +642,15 @@ class TxReconciliationTracker::Impl {
         return true;
     }
 
+    void HandleIncomingExtensionRequest(NodeId peer_id)
+    {
+        LOCK(m_mutex);
+        auto recon_state = m_states.find(peer_id);
+        if (recon_state == m_states.end()) return;
+        if (recon_state->second.m_state_init_by_them.m_phase != RECON_INIT_RESPONDED) return;
+        recon_state->second.m_state_init_by_them.m_phase = RECON_EXT_REQUESTED;
+    }
+
     void RemovePeer(NodeId peer_id)
     {
         LOCK(m_mutex);
@@ -730,6 +739,11 @@ bool TxReconciliationTracker::HandleSketch(NodeId peer_id, int common_version, c
     std::vector<uint32_t>& txs_to_request, std::vector<uint256>& txs_to_announce, std::optional<bool>& result)
 {
     return m_impl->HandleSketch(peer_id, common_version, skdata, txs_to_request, txs_to_announce, result);
+}
+
+void TxReconciliationTracker::HandleIncomingExtensionRequest(NodeId peer_id)
+{
+    m_impl->HandleIncomingExtensionRequest(peer_id);
 }
 
 void TxReconciliationTracker::RemovePeer(NodeId peer_id)
