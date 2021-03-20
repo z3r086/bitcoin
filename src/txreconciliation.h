@@ -84,6 +84,8 @@ class TxReconciliationTracker {
 
     /**
      * Step 2. Record an (expected) reconciliation request with parameters to respond when its time.
+     * All initial reconciliation responses will be done not immediately but in batches after
+     * a delay, to prevent privacy leaks.
      */
     void HandleReconciliationRequest(NodeId peer_id, uint16_t peer_recon_set_size, uint16_t peer_q);
 
