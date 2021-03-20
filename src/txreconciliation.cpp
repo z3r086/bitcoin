@@ -31,6 +31,12 @@ constexpr uint32_t MAX_OUTBOUND_FLOOD_TO = 8;
  * Less frequent reconciliations would introduce high transaction relay latency.
  */
 constexpr std::chrono::microseconds RECON_REQUEST_INTERVAL{16s};
+/**
+ * Interval between responding to peers' reconciliation requests.
+ * We don't respond to reconciliation requests right away because that would enable monitoring
+ * when we receive transactions (privacy leak).
+ */
+constexpr std::chrono::microseconds RECON_RESPONSE_INTERVAL{2s};
 
 /**
  * Represents phase of the current reconciliation round with a peer.
@@ -89,6 +95,12 @@ struct ReconciliationInitByThem {
      * we respond to that request with a sketch.
      */
     uint16_t m_remote_set_size;
+
+    /**
+     * When a reconciliation request is received, instead of responding to it right away,
+     * we schedule a response for later, so that a spy can’t monitor our reconciliation sets.
+     */
+    std::chrono::microseconds m_next_recon_respond{0};
 
     /** Keep track of the reconciliation phase with the peer. */
     ReconciliationPhase m_phase{RECON_NONE};
@@ -180,6 +192,20 @@ class TxReconciliationTracker::Impl {
     void UpdateNextReconRequest(std::chrono::microseconds now) EXCLUSIVE_LOCKS_REQUIRED(m_mutex)
     {
         m_next_recon_request = now + RECON_REQUEST_INTERVAL / m_queue.size();
+    }
+
+    /**
+     * Used to schedule the next initial response for any pending reconciliation request.
+     * Respond to all requests at the same time to prevent transaction possession leak.
+     */
+    std::chrono::microseconds m_next_recon_respond{0};
+    std::chrono::microseconds NextReconRespond()
+    {
+        auto current_time = GetTime<std::chrono::microseconds>();
+        if (m_next_recon_respond < current_time) {
+            m_next_recon_respond = current_time + RECON_RESPONSE_INTERVAL;
+        }
+        return m_next_recon_respond;
     }
 
     public:
@@ -295,6 +321,7 @@ class TxReconciliationTracker::Impl {
 
         recon_state->second.m_state_init_by_them.m_remote_q = peer_q_converted;
         recon_state->second.m_state_init_by_them.m_remote_set_size = peer_recon_set_size;
+        recon_state->second.m_state_init_by_them.m_next_recon_respond = NextReconRespond();
         recon_state->second.m_state_init_by_them.m_phase = RECON_INIT_REQUESTED;
         LogPrint(BCLog::NET, "Reconciliation initiated by peer=%d with the following params: "
             "remote_q=%d, remote_set_size=%i\n", peer_id, peer_q_converted, peer_recon_set_size);
