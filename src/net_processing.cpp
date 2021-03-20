@@ -383,6 +383,9 @@ private:
     /** Number of peers with wtxid relay. */
     int m_wtxid_relay_peers GUARDED_BY(cs_main) = 0;
 
+    /** Number of outbound peers we may flood transactions to. */
+    int m_out_flooding_peers GUARDED_BY(cs_main) = 0;
+
     /** Number of outbound peers with m_chain_sync.m_protect. */
     int m_outbound_peers_with_protect_from_disconnect GUARDED_BY(cs_main) = 0;
 
@@ -613,6 +616,9 @@ struct CNodeState {
 
     //! Whether this peer relays txs via wtxid
     bool m_wtxid_relay{false};
+
+    //! Whether this peer may be used by us for flooding txs.
+    bool m_we_may_flood_to{false};
 
     CNodeState(CAddress addrIn, bool is_inbound)
         : address(addrIn), m_is_inbound(is_inbound)
@@ -1055,6 +1061,8 @@ void PeerManagerImpl::FinalizeNode(const CNode& node, bool& fUpdateConnectionTim
     assert(m_outbound_peers_with_protect_from_disconnect >= 0);
     m_wtxid_relay_peers -= state->m_wtxid_relay;
     assert(m_wtxid_relay_peers >= 0);
+    m_out_flooding_peers -= state->m_we_may_flood_to;
+    assert(m_out_flooding_peers >= 0);
 
     mapNodeState.erase(nodeid);
 
@@ -2762,6 +2770,28 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
                       pfrom.nVersion.load(), peer->m_starting_height,
                       pfrom.GetId(), (fLogIPs ? strprintf(", peeraddr=%s", pfrom.addr.ToString()) : ""),
                       pfrom.ConnectionTypeAsString());
+
+            // Keep track of the number of outbound flooding peers.
+            bool we_may_flood_to = false;
+            if (pfrom.MightSupportTransactionRelay()) {
+                if (m_reconciliation.IsPeerRegistered(pfrom.GetId())) {
+                    if (*m_reconciliation.IsPeerChosenForFlooding(pfrom.GetId())) {
+                        // We flood txs to only a subset of outbound reconciling peers.
+                        we_may_flood_to = true;
+                    }
+                } else {
+                    // All non-reconciling peers which pass the MightSupportTransactionRelay and
+                    // !IsInboundConn checks are outbound flooding peers.
+                    we_may_flood_to = true;
+                }
+            }
+
+            LOCK(cs_main);
+            State(pfrom.GetId())->m_we_may_flood_to = we_may_flood_to;
+            if (we_may_flood_to) {
+                ++m_out_flooding_peers;
+            }
+
         }
 
         if (pfrom.GetCommonVersion() >= SENDHEADERS_VERSION) {
