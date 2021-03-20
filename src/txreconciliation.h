@@ -85,6 +85,12 @@ class TxReconciliationTracker {
      * If the peer was not previously registered for reconciliations, returns nullopt.
      */
     std::optional<bool> IsPeerChosenForFlooding(NodeId peer_id) const;
+
+    /**
+     * Tells whether a given peer might respond to our reconciliation requests.
+     * If the peer was not previously registered for reconciliations, returns nullopt.
+     */
+    std::optional<bool> IsPeerResponder(NodeId peer_id) const;
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H
