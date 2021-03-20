@@ -609,13 +609,32 @@ class TxReconciliationTracker::Impl {
 
         ReconciliationPhase outgoing_phase = recon_state->second.m_state_init_by_us.m_phase;
         bool phase_init_requested = outgoing_phase == RECON_INIT_REQUESTED;
+        bool phase_ext_requested = outgoing_phase == RECON_EXT_REQUESTED;
 
-        if (!phase_init_requested) return false;
+        if (!phase_init_requested && !phase_ext_requested) return false;
 
-        Minisketch local_sketch = recon_state->second.ComputeSketch(remote_sketch_capacity);
-        Minisketch remote_sketch;
-        if (remote_sketch_capacity != 0) {
-            remote_sketch = Minisketch(RECON_FIELD_SIZE, 0, remote_sketch_capacity).Deserialize(skdata);
+        Minisketch local_sketch, remote_sketch;
+        // Prepare local sketch depending on the reconciliation phase.
+        if (phase_init_requested) {
+            local_sketch = recon_state->second.ComputeSketch(remote_sketch_capacity);
+        } else {
+            local_sketch = recon_state->second.GetLocalExtendedSketch();
+        }
+
+        // Prepare remote sketch depending on the reconciliation phase.
+        std::vector<uint8_t> working_skdata = std::vector<uint8_t>(skdata);
+        if (phase_ext_requested) {
+            // A sketch extension is missing the lower elements (to be a valid extended sketch),
+            // which we stored on our side at initial reconciliation step.
+            working_skdata.insert(working_skdata.begin(),
+                recon_state->second.m_state_init_by_us.m_remote_sketch_snapshot.begin(),
+                recon_state->second.m_state_init_by_us.m_remote_sketch_snapshot.end());
+            // We need full sketch capacity to properly parse it.
+            remote_sketch_capacity *= 2;
+        }
+
+        if (remote_sketch_capacity > 0) {
+            remote_sketch = Minisketch(RECON_FIELD_SIZE, 0, remote_sketch_capacity).Deserialize(working_skdata);
         }
 
         // Early exit due to empty sketch or API failure.
@@ -624,10 +643,14 @@ class TxReconciliationTracker::Impl {
                 remote_sketch_capacity == 0 ? "empty sketch" : "minisketch API failure");
 
             // Announce all transactions we have.
-            txs_to_announce.assign(recon_state->second.m_local_set.begin(), recon_state->second.m_local_set.end());
-
             // Update local reconciliation state for the peer.
-            recon_state->second.FinalizeInitByUs(true, DEFAULT_RECON_Q);
+            if (phase_init_requested) {
+                txs_to_announce.assign(recon_state->second.m_local_set.begin(), recon_state->second.m_local_set.end());
+                recon_state->second.FinalizeInitByUs(true, DEFAULT_RECON_Q);
+            } else {
+                txs_to_announce.assign(recon_state->second.m_local_set_snapshot.begin(), recon_state->second.m_local_set_snapshot.end());
+                recon_state->second.FinalizeInitByUs(false, DEFAULT_RECON_Q);
+            }
             recon_state->second.m_state_init_by_us.m_phase = RECON_NONE;
 
             result = false;
@@ -645,7 +668,12 @@ class TxReconciliationTracker::Impl {
             recon_state->second.GetRelevantIDsFromShortIDs(differences, txs_to_request, txs_to_announce);
 
             // Update local reconciliation state for the peer.
-            size_t local_set_size = recon_state->second.m_local_set.size();
+            size_t local_set_size;
+            if (phase_init_requested) {
+                local_set_size = recon_state->second.m_local_set.size();
+            } else {
+                local_set_size = recon_state->second.m_local_set_snapshot.size();
+            }
             recon_state->second.FinalizeInitByUs(true,
                 RecomputeQ(local_set_size, txs_to_request.size(), txs_to_announce.size()));
             recon_state->second.m_state_init_by_us.m_phase = RECON_NONE;
@@ -654,15 +682,34 @@ class TxReconciliationTracker::Impl {
             LogPrint(BCLog::NET, "Reconciliation we initiated with peer=%d has succeeded at initial step, "
                 "request %i txs, announce %i txs \n", peer_id, txs_to_request.size(), txs_to_announce.size());
         } else {
-            // Initial reconciliation step failed.
+            // Reconciliation over the current working sketch failed.
+            if (recon_state->second.m_state_init_by_us.m_phase == RECON_INIT_REQUESTED) {
+                // Initial reconciliation step failed.
 
-            // Update local reconciliation state for the peer.
-            recon_state->second.PrepareForExtensionResponse(remote_sketch_capacity, skdata);
-            recon_state->second.m_state_init_by_us.m_phase = RECON_EXT_REQUESTED;
+                // Update local reconciliation state for the peer.
+                recon_state->second.PrepareForExtensionResponse(remote_sketch_capacity, skdata);
+                recon_state->second.m_state_init_by_us.m_phase = RECON_EXT_REQUESTED;
 
-            result = std::nullopt;
-            LogPrint(BCLog::NET, "Reconciliation we initiated with peer=%d has failed at initial step, "
-                "request %i txs, announce %i txs \n", peer_id, txs_to_request.size(), txs_to_announce.size());
+                result = std::nullopt;
+                LogPrint(BCLog::NET, "Reconciliation we initiated with peer=%d has failed at initial step, "
+                    "request %i txs, announce %i txs \n", peer_id, txs_to_request.size(), txs_to_announce.size());
+            } else {
+                // Reconciliation over extended sketch failed.
+
+                // Announce all local transactions from the reconciliation set.
+                // All remote transactions will be announced by peer based on the reconciliation
+                // failure flag.
+                txs_to_announce.assign(recon_state->second.m_local_set_snapshot.begin(), recon_state->second.m_local_set_snapshot.end());
+
+                // Update local reconciliation state for the peer.
+                recon_state->second.FinalizeInitByUs(false, DEFAULT_RECON_Q);
+                recon_state->second.m_state_init_by_us.m_phase = RECON_NONE;
+
+                result = false;
+                LogPrint(BCLog::NET, "Reconciliation we initiated with peer=%d has failed at extension step, "
+                    "request all txs, announce %i txs \n", peer_id, txs_to_announce.size());
+
+            }
         }
         return true;
     }
