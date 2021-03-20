@@ -46,6 +46,14 @@ class TxReconciliationTracker::Impl {
 
         return std::make_tuple(we_initiate_recon, we_respond_recon, RECON_VERSION, m_local_recon_salt);
     }
+
+    void RemovePeer(NodeId peer_id)
+    {
+        LogPrint(BCLog::NET, "Stop tracking reconciliation state for peer=%d\n", peer_id);
+        LOCK(m_mutex);
+        m_local_salts.erase(peer_id);
+    }
+
 };
 
 TxReconciliationTracker::TxReconciliationTracker() :
@@ -56,4 +64,9 @@ TxReconciliationTracker::~TxReconciliationTracker() = default;
 std::tuple<bool, bool, uint32_t, uint64_t> TxReconciliationTracker::SuggestReconciling(NodeId peer_id, bool inbound)
 {
     return m_impl->SuggestReconciling(peer_id, inbound);
+}
+
+void TxReconciliationTracker::RemovePeer(NodeId peer_id)
+{
+    m_impl->RemovePeer(peer_id);
 }
