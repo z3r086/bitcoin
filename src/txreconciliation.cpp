@@ -97,6 +97,13 @@ class TxReconciliationTracker::Impl {
      */
     std::unordered_map<NodeId, ReconciliationState> m_states GUARDED_BY(m_mutex);
 
+    /**
+     * Maintains a queue of reconciliations we should initiate. To achieve higher bandwidth
+     * conservation and avoid overflows, we should reconcile in the same order, because then it’s
+     * easier to estimate set differene size.
+     */
+    std::deque<NodeId> m_queue GUARDED_BY(m_mutex);
+
     public:
 
     std::tuple<bool, bool, uint32_t, uint64_t> SuggestReconciling(NodeId peer_id, bool inbound)
@@ -143,6 +150,10 @@ class TxReconciliationTracker::Impl {
 
         if (!(they_initiate || we_initiate)) return;
 
+        if (we_initiate) {
+            m_queue.push_back(peer_id);
+        }
+
         // To save bandwidth, we never flood to inbound peers we reconcile with. We may flood *some*
         // transactions to a limited number outbound peers we reconcile with.
         bool flood_to = !inbound && outbound_flooders < MAX_OUTBOUND_FLOOD_TO;
@@ -172,6 +183,7 @@ class TxReconciliationTracker::Impl {
         LOCK(m_mutex);
         m_local_salts.erase(peer_id);
         m_states.erase(peer_id);
+        m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), peer_id), m_queue.end());
     }
 
     bool IsPeerRegistered(NodeId peer_id) const
