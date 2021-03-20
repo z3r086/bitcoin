@@ -65,7 +65,8 @@ enum ReconciliationPhase {
     RECON_NONE,
     RECON_INIT_REQUESTED,
     RECON_INIT_RESPONDED,
-    RECON_EXT_REQUESTED
+    RECON_EXT_REQUESTED,
+    RECON_EXT_RESPONDED
 };
 
 /**
@@ -556,18 +557,37 @@ class TxReconciliationTracker::Impl {
         auto current_time = GetTime<std::chrono::microseconds>();
         bool timely_initial_request = incoming_phase == RECON_INIT_REQUESTED &&
             current_time > recon_state->second.m_state_init_by_them.m_next_recon_respond;
-        if (!timely_initial_request) {
+        bool extension_request = incoming_phase == RECON_EXT_REQUESTED;
+        if (!timely_initial_request && !extension_request) {
             return false;
         }
 
-        // Compute a sketch over the local reconciliation set.
-        uint16_t sketch_capacity = recon_state->second.m_state_init_by_them.EstimateSketchCapacity(
-            recon_state->second.m_local_set.size());
-        Minisketch sketch = recon_state->second.ComputeSketch(sketch_capacity);
+        Minisketch sketch;
+        if (timely_initial_request) {
+            // Responding to an initial reconciliation request.
+            uint16_t sketch_capacity = recon_state->second.m_state_init_by_them.EstimateSketchCapacity(
+                recon_state->second.m_local_set.size());
+            sketch = recon_state->second.GetLocalBaseSketch(sketch_capacity);
 
-        recon_state->second.m_state_init_by_them.m_phase = RECON_INIT_RESPONDED;
-        recon_state->second.PrepareForExtensionRequest(sketch_capacity);
-        if (sketch) skdata = sketch.Serialize();
+            recon_state->second.m_state_init_by_them.m_phase = RECON_INIT_RESPONDED;
+            recon_state->second.PrepareForExtensionRequest(sketch_capacity);
+            if (sketch) skdata = sketch.Serialize();
+        } else {
+            // Responding to an extension request.
+            sketch = recon_state->second.GetLocalExtendedSketch();
+            recon_state->second.m_state_init_by_them.m_phase = RECON_EXT_RESPONDED;
+
+            // Local extension sketch can be null only if initial sketch or initial capacity was 0,
+            // in which case we would have terminated reconciliation already.
+            assert(sketch);
+            skdata = sketch.Serialize();
+
+            // For the sketch extension, send only the higher sketch elements.
+            size_t lower_bytes_to_drop = recon_state->second.m_capacity_snapshot * BYTES_PER_SKETCH_CAPACITY;
+            // Extended sketch is twice the size of the initial sketch (which is m_capacity_snapshot).
+            assert(lower_bytes_to_drop <= skdata.size());
+            skdata.erase(skdata.begin(), skdata.begin() + lower_bytes_to_drop);
+        }
         return true;
     }
 
