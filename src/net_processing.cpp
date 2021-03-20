@@ -4174,6 +4174,26 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         return;
     }
 
+    if (msg_type == NetMsgType::SKETCH) {
+        std::vector<uint8_t> skdata;
+        vRecv >> skdata;
+
+        std::vector<uint32_t> txs_to_request;
+        std::vector<uint256> txs_to_announce;
+        bool recon_result;
+
+        const bool valid_sketch = m_reconciliation.HandleSketch(pfrom.GetId(), pfrom.GetCommonVersion(), skdata,
+            txs_to_request, txs_to_announce, recon_result);
+        if (valid_sketch) {
+            m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::RECONCILDIFF,
+                recon_result, txs_to_request));
+            AnnounceTxs(txs_to_announce, pfrom);
+        } else {
+            pfrom.fDisconnect = true;
+        }
+        return;
+    }
+
     // Ignore unknown commands for extensibility
     LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
     return;
