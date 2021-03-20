@@ -63,7 +63,8 @@ class TxReconciliationTracker {
      * Do nothing if peer behaves incompatibly.
      */
     void EnableReconciliationSupport(NodeId peer_id, bool inbound,
-        bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt);
+        bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt,
+        size_t outbound_flooders);
 
     // Helpers
 
