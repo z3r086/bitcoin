@@ -100,6 +100,12 @@ public:
     std::optional<std::pair<uint16_t, uint16_t>> MaybeRequestReconciliation(NodeId peer_id);
 
     /**
+     * Step 2. Record an (expected) reconciliation request with parameters to respond when its time.
+     * If peer violates the protocol, do nothing.
+     */
+    void HandleReconciliationRequest(NodeId peer_id, uint16_t peer_recon_set_size, uint16_t peer_q);
+
+    /**
      * Returns the size of the reconciliation set we have locally for the given peer.
      */
     size_t GetPeerSetSize(NodeId peer_id) const;
