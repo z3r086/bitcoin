@@ -59,6 +59,7 @@ constexpr std::chrono::microseconds RECON_RESPONSE_INTERVAL{2s};
 enum ReconciliationPhase {
     RECON_NONE,
     RECON_INIT_REQUESTED,
+    RECON_INIT_RESPONDED,
 };
 
 /**
@@ -402,6 +403,36 @@ class TxReconciliationTracker::Impl {
             "remote_q=%d, remote_set_size=%i\n", peer_id, peer_q_converted, peer_recon_set_size);
     }
 
+    bool RespondToReconciliationRequest(NodeId peer_id, std::vector<uint8_t>& skdata)
+    {
+        LOCK(m_mutex);
+        auto recon_state = m_states.find(peer_id);
+        if (recon_state == m_states.end()) return false;
+        if (recon_state->second.m_we_initiate) return false;
+
+        ReconciliationPhase incoming_phase = recon_state->second.m_state_init_by_them.m_phase;
+
+        // For initial requests, respond only periodically to a) limit CPU usage for sketch computation,
+        // and, b) limit transaction possession privacy leak.
+        auto current_time = GetTime<std::chrono::microseconds>();
+        bool timely_initial_request = incoming_phase == RECON_INIT_REQUESTED &&
+            current_time > recon_state->second.m_state_init_by_them.m_next_recon_respond;
+        if (!timely_initial_request) {
+            return false;
+        }
+
+        // Compute a sketch over the local reconciliation set.
+        uint16_t sketch_capacity = recon_state->second.m_state_init_by_them.EstimateSketchCapacity(
+            recon_state->second.m_local_set.size());
+        Minisketch sketch = recon_state->second.ComputeSketch(sketch_capacity);
+
+        recon_state->second.m_state_init_by_them.m_phase = RECON_INIT_RESPONDED;
+        if (sketch) skdata = sketch.Serialize();
+        LogPrint(BCLog::NET, "Responding with a sketch to reconciliation initiated by peer=%d: "
+            "sending sketch of capacity=%i\n", peer_id, sketch_capacity);
+        return true;
+    }
+
     void RemovePeer(NodeId peer_id)
     {
         LogPrint(BCLog::NET, "Stop tracking reconciliation state for peer=%d\n", peer_id);
@@ -480,6 +511,11 @@ std::optional<std::pair<uint16_t, uint16_t>> TxReconciliationTracker::MaybeReque
 void TxReconciliationTracker::HandleReconciliationRequest(NodeId peer_id, uint16_t peer_recon_set_size, uint16_t peer_q)
 {
     m_impl->HandleReconciliationRequest(peer_id, peer_recon_set_size, peer_q);
+}
+
+bool TxReconciliationTracker::RespondToReconciliationRequest(NodeId peer_id, std::vector<uint8_t>& skdata)
+{
+    return m_impl->RespondToReconciliationRequest(peer_id, skdata);
 }
 
 void TxReconciliationTracker::RemovePeer(NodeId peer_id)
