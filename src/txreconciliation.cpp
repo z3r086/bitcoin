@@ -167,6 +167,15 @@ class TxReconciliationTracker::Impl {
         return (*recon_state).second.m_flood_to;
     }
 
+    std::optional<bool> IsPeerResponder(NodeId peer_id) const
+    {
+        LOCK(m_mutex);
+        auto recon_state = m_states.find(peer_id);
+        if (recon_state == m_states.end()) {
+            return std::nullopt;
+        }
+        return (*recon_state).second.m_we_initiate;
+    }
 };
 
 TxReconciliationTracker::TxReconciliationTracker() :
@@ -200,4 +209,9 @@ bool TxReconciliationTracker::IsPeerRegistered(NodeId peer_id) const
 std::optional<bool> TxReconciliationTracker::IsPeerChosenForFlooding(NodeId peer_id) const
 {
     return m_impl->IsPeerChosenForFlooding(peer_id);
+}
+
+std::optional<bool> TxReconciliationTracker::IsPeerResponder(NodeId peer_id) const
+{
+    return m_impl->IsPeerResponder(peer_id);
 }
