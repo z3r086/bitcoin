@@ -1044,6 +1044,9 @@ void PeerManagerImpl::FinalizeNode(const CNode& node, bool& fUpdateConnectionTim
     }
     EraseOrphansFor(nodeid);
     m_txrequest.DisconnectedPeer(nodeid);
+    // Do not check whether peer is registered for reconciliation here, but rather delegate checks
+    // to the module. Otherwise it's easy to skip deleting an intermediate state (e.g., we store
+    // salt for peers before we register them for reconciliation).
     m_reconciliation.RemovePeer(nodeid);
     nPreferredDownload -= state->fPreferredDownload;
     nPeersWithValidatedDownloads -= (state->nBlocksInFlightValidHeaders != 0);
