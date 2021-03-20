@@ -51,8 +51,12 @@ public:
     /** Send ping message to all peers */
     virtual void SendPings() = 0;
 
-    /** Relay transaction to every node */
-    virtual void RelayTransaction(const uint256& txid, const uint256& wtxid) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
+    /**
+     * Relay transaction to every node.
+     * The announcement protocol (flooding or reconciliation) will be chosen based on from which
+     * peer the transaction came to us. For transactions originated locally, pass from=nullopt.
+     */
+    virtual void RelayTransaction(const uint256& txid, const uint256& wtxid, std::optional<NodeId> from=std::nullopt) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
 
     /** Set the best height */
     virtual void SetBestHeight(int height) = 0;
