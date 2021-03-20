@@ -2920,8 +2920,10 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         uint64_t remote_salt;
         vRecv >> they_initiator >> they_responder >> recon_version >> remote_salt;
 
+        // Since this is called before VERACK, m_out_flooding_peers doesn't include this peer
+        // being considered for reconciliation support, so no need for substraction.
         m_reconciliation.EnableReconciliationSupport(pfrom.GetId(), pfrom.IsInboundConn(),
-            they_initiator, they_responder, recon_version, remote_salt);
+            they_initiator, they_responder, recon_version, remote_salt, m_out_flooding_peers);
         return;
     }
 

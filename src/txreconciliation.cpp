@@ -10,6 +10,12 @@ namespace {
 constexpr uint32_t RECON_VERSION = 1;
 /** Static component of the salt used to compute short txids for inclusion in sketches. */
 const std::string RECON_STATIC_SALT = "Tx Relay Salting";
+/**
+ * When considering whether we should flood to an outbound connection supporting reconciliation,
+ * see how many outbound connections are already used for flooding. Flood only if the limit is not reached.
+ * It helps to save bandwidth and reduce the privacy leak.
+ */
+constexpr uint32_t MAX_OUTBOUND_FLOOD_TO = 8;
 
 /**
  * Salt is specified by BIP-330 is constructed from contributions from both peers. It is later used
@@ -105,7 +111,8 @@ class TxReconciliationTracker::Impl {
     }
 
     bool EnableReconciliationSupport(NodeId peer_id, bool inbound,
-        bool they_may_initiate, bool they_may_respond, uint32_t recon_version, uint64_t remote_salt)
+        bool they_may_initiate, bool they_may_respond, uint32_t recon_version, uint64_t remote_salt,
+        size_t outbound_flooders)
     {
         // Do not support reconciliation salt/version updates.
         LOCK(m_mutex);
@@ -127,9 +134,8 @@ class TxReconciliationTracker::Impl {
         if (!(they_initiate || we_initiate)) return false;
 
         // To save bandwidth, we never flood to inbound peers we reconcile with. We may flood *some*
-        // transactions to outbound peers we reconcile with.
-        // TODO: Flood only through a limited number of outbound connections.
-        bool flood_to = !inbound;
+        // transactions to a limited number outbound peers we reconcile with.
+        bool flood_to = !inbound && outbound_flooders < MAX_OUTBOUND_FLOOD_TO;
 
         uint256 full_salt = ComputeSalt(m_local_salts.at(peer_id), remote_salt);
 
@@ -174,10 +180,11 @@ std::tuple<bool, bool, uint32_t, uint64_t> TxReconciliationTracker::SuggestRecon
 }
 
 bool TxReconciliationTracker::EnableReconciliationSupport(NodeId peer_id, bool inbound,
-    bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt)
+    bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt,
+    size_t outbound_flooders)
 {
     return m_impl->EnableReconciliationSupport(peer_id, inbound, recon_requestor, recon_responder,
-        recon_version, remote_salt);
+        recon_version, remote_salt, outbound_flooders);
 }
 
 void TxReconciliationTracker::RemovePeer(NodeId peer_id)
