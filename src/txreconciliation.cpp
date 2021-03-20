@@ -152,8 +152,14 @@ struct ReconciliationInitByThem {
 /**
  * Convert a vector sketch representation we received from the peer to a Minisketch object.
  */
-std::optional<std::pair<Minisketch, uint16_t>> ParseRemoteSketch(const std::vector<uint8_t>& skdata)
+std::optional<std::pair<Minisketch, uint16_t>> ParseRemoteSketch(
+    const std::vector<uint8_t>& remote_sketch_snapshot, std::vector<uint8_t> skdata)
 {
+    if (remote_sketch_snapshot.size() > 0) {
+        // A sketch extension is missing the lower elements (to be a valid extended sketch),
+        // which we stored on our side at initial reconciliation step.
+        skdata.insert(skdata.begin(), remote_sketch_snapshot.begin(), remote_sketch_snapshot.end());
+    }
     uint16_t remote_sketch_capacity = uint16_t(skdata.size() / BYTES_PER_SKETCH_CAPACITY);
     if (remote_sketch_capacity != 0) {
         Minisketch remote_sketch = Minisketch(RECON_FIELD_SIZE, 0, remote_sketch_capacity).Deserialize(skdata);
@@ -609,26 +615,38 @@ class TxReconciliationTracker::Impl {
 
         const ReconciliationPhase outgoing_phase = recon_state->second.m_state_init_by_us.m_phase;
         const bool phase_init_requested = outgoing_phase == RECON_INIT_REQUESTED;
+        const bool phase_ext_requested = outgoing_phase == RECON_EXT_REQUESTED;
 
-        if (!phase_init_requested) return false;
+        if (!phase_init_requested && !phase_ext_requested) return false;
 
         Minisketch remote_sketch;
         uint16_t remote_sketch_capacity = 0;
-        auto parsed_remote_sketch_data = ParseRemoteSketch(skdata);
+        auto parsed_remote_sketch_data = ParseRemoteSketch(recon_state->second.m_state_init_by_us.m_remote_sketch_snapshot, skdata);
         if (parsed_remote_sketch_data) {
             remote_sketch = parsed_remote_sketch_data->first;
             remote_sketch_capacity = parsed_remote_sketch_data->second;
             // An empty sketch is handled below along with other errors.
         }
 
-        Minisketch local_sketch = recon_state->second.GetLocalBaseSketch(remote_sketch_capacity);
+        Minisketch local_sketch;
+
+        if (phase_init_requested) {
+            local_sketch = recon_state->second.GetLocalBaseSketch(remote_sketch_capacity);
+        } else {
+            local_sketch = recon_state->second.GetLocalExtendedSketch();
+        }
 
         if (remote_sketch_capacity == 0 || !remote_sketch || !local_sketch) {
             LogPrint(BCLog::NET, "Reconciliation initiated by us failed due to %s \n",
                 remote_sketch_capacity == 0 ? "empty sketch" : "minisketch API failure");
 
-            txs_to_announce.assign(recon_state->second.m_local_set.begin(), recon_state->second.m_local_set.end());
-            recon_state->second.FinalizeInitByUs(true, DEFAULT_RECON_Q);
+            if (phase_init_requested) {
+                txs_to_announce.assign(recon_state->second.m_local_set.begin(), recon_state->second.m_local_set.end());
+                recon_state->second.FinalizeInitByUs(true, DEFAULT_RECON_Q);
+            } else {
+                txs_to_announce.assign(recon_state->second.m_local_set_snapshot.begin(), recon_state->second.m_local_set_snapshot.end());
+                recon_state->second.FinalizeInitByUs(false, DEFAULT_RECON_Q);
+            }
             recon_state->second.m_state_init_by_us.m_phase = RECON_NONE;
             result = false;
             return true;
@@ -644,20 +662,38 @@ class TxReconciliationTracker::Impl {
 
             recon_state->second.GetRelevantIDsFromShortIDs(differences, txs_to_request, txs_to_announce);
 
-            size_t local_set_size = recon_state->second.m_local_set.size();
+            size_t local_set_size;
+            if (phase_init_requested) {
+                local_set_size = recon_state->second.m_local_set.size();
+            } else {
+                local_set_size = recon_state->second.m_local_set_snapshot.size();
+            }
             recon_state->second.FinalizeInitByUs(true,
                 RecomputeQ(local_set_size, txs_to_request.size(), txs_to_announce.size()));
             recon_state->second.m_state_init_by_us.m_phase = RECON_NONE;
             result = true;
         } else {
-            // Initial reconciliation failed.
-            LogPrint(BCLog::NET, "Outgoing reconciliation initially failed, requesting extension sketch\n");
+            // Reconciliation over the current working sketch failed.
+            if (recon_state->second.m_state_init_by_us.m_phase == RECON_INIT_REQUESTED) {
+                // Initial reconciliation failed.
+                LogPrint(BCLog::NET, "Outgoing reconciliation initially failed, requesting extension sketch\n");
 
-            // Store the received sketch and the local sketch, request extension.
-            recon_state->second.m_state_init_by_us.m_phase = RECON_EXT_REQUESTED;
-            recon_state->second.PrepareForExtensionResponse(remote_sketch_capacity, skdata);
-            result = std::nullopt;
-            return true;
+                // Store the received sketch and the local sketch, request extension.
+                recon_state->second.m_state_init_by_us.m_phase = RECON_EXT_REQUESTED;
+                recon_state->second.PrepareForExtensionResponse(remote_sketch_capacity, skdata);
+                result = std::nullopt;
+            } else {
+                // Reconciliation over extended sketch failed.
+                LogPrint(BCLog::NET, "Outgoing reconciliation failed after extension\n");
+
+                // Announce all local transactions from the reconciliation set.
+                // All remote transactions will be announced by peer due to the reconciliation
+                // failure flag.
+                txs_to_announce.assign(recon_state->second.m_local_set_snapshot.begin(), recon_state->second.m_local_set_snapshot.end());
+                recon_state->second.FinalizeInitByUs(false, DEFAULT_RECON_Q);
+                recon_state->second.m_state_init_by_us.m_phase = RECON_NONE;
+                result = false;
+            }
         }
         return true;
     }
