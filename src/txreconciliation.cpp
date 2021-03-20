@@ -269,14 +269,22 @@ class ReconciliationState {
      * (a sketch). A sketch has a capacity meaning it allows reconciling at most a certain number
      * of elements (see BIP-330).
      */
-    Minisketch ComputeSketch(uint16_t capacity)
+    Minisketch ComputeSketch(uint16_t capacity, bool use_snapshot=false)
     {
         Minisketch sketch;
+        std::set<uint256> working_set;
+
+        if (use_snapshot) {
+            working_set = m_local_set_snapshot;
+        } else {
+            working_set = m_local_set;
+            m_capacity_snapshot = capacity;
+        }
         // Avoid serializing/sending an empty sketch.
-        if (m_local_set.size() == 0 || capacity == 0) return sketch;
+        if (working_set.size() == 0 || capacity == 0) return sketch;
 
         std::vector<uint32_t> short_ids;
-        for (const auto& wtxid: m_local_set) {
+        for (const auto& wtxid: working_set) {
             uint32_t short_txid = ComputeShortID(wtxid);
             short_ids.push_back(short_txid);
             m_local_short_id_mapping.emplace(short_txid, wtxid);
@@ -290,6 +298,20 @@ class ReconciliationState {
             }
         }
         return sketch;
+    }
+
+    Minisketch GetLocalBaseSketch(uint16_t capacity)
+    {
+        return ComputeSketch(capacity, false);
+    }
+
+    Minisketch GetLocalExtendedSketch()
+    {
+        // For now, compute a sketch of twice the capacity were computed originally.
+        // TODO: optimize by computing the extension *on top* of the existent sketch
+        // instead of computing the lower order elements again.
+        const uint16_t extended_capacity = m_capacity_snapshot * 2;
+        return ComputeSketch(extended_capacity, true);
     }
 
     /**
@@ -564,7 +586,7 @@ class TxReconciliationTracker::Impl {
             // An empty sketch is handled below along with other errors.
         }
 
-        Minisketch local_sketch = recon_state->second.ComputeSketch(remote_sketch_capacity);
+        Minisketch local_sketch = recon_state->second.GetLocalBaseSketch(remote_sketch_capacity);
 
         if (remote_sketch_capacity == 0 || !remote_sketch || !local_sketch) {
             LogPrint(BCLog::NET, "Reconciliation initiated by us failed due to %s \n",
