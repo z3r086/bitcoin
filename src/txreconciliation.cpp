@@ -14,6 +14,11 @@ constexpr uint32_t RECON_VERSION = 1;
 const std::string RECON_STATIC_SALT = "Tx Relay Salting";
 /** The size of the field, used to compute sketches to reconcile transactions (see BIP-330). */
 constexpr unsigned int RECON_FIELD_SIZE = 32;
+/**
+ * Allows to infer capacity of a reconciliation sketch based on it's char[] representation,
+ * which is necessary to deserealize a received sketch.
+ */
+constexpr unsigned int BYTES_PER_SKETCH_CAPACITY = RECON_FIELD_SIZE / 8;
 /** Limit sketch capacity to avoid DoS. */
 constexpr uint16_t MAX_SKETCH_CAPACITY = 2 << 12;
 /**
@@ -134,6 +139,20 @@ struct ReconciliationInitByThem {
         return minisketch_compute_capacity(RECON_FIELD_SIZE, estimated_diff, RECON_FALSE_POSITIVE_COEF);
     }
 };
+
+/**
+ * Convert a vector sketch representation we received from the peer to a Minisketch object.
+ */
+std::optional<std::pair<Minisketch, uint16_t>> ParseRemoteSketch(const std::vector<uint8_t>& skdata)
+{
+    uint16_t remote_sketch_capacity = uint16_t(skdata.size() / BYTES_PER_SKETCH_CAPACITY);
+    if (remote_sketch_capacity != 0) {
+        Minisketch remote_sketch = Minisketch(RECON_FIELD_SIZE, 0, remote_sketch_capacity).Deserialize(skdata);
+        return std::make_pair(remote_sketch, remote_sketch_capacity);
+    } else {
+        return std::nullopt;
+    }
+}
 
 /**
  * Used to keep track of the ongoing reconciliations, the transactions we want to announce to the
