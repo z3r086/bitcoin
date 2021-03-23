@@ -16,6 +16,14 @@ const std::string RECON_STATIC_SALT = "Tx Relay Salting";
  * It helps to save bandwidth and reduce the privacy leak.
  */
 constexpr uint32_t MAX_OUTBOUND_FLOOD_TO = 8;
+/**
+ * Interval between initiating reconciliations with a given peer.
+ * This value allows to reconcile ~100 transactions (7 tx/s * 16s) during normal system operation.
+ * More frequent reconciliations would cause significant constant bandwidth overhead
+ * due to reconciliation metadata (sketch sizes etc.), which would nullify the efficiency.
+ * Less frequent reconciliations would introduce high transaction relay latency.
+ */
+constexpr std::chrono::microseconds RECON_REQUEST_INTERVAL{16s};
 
 /**
  * Salt is specified by BIP-330 is constructed from contributions from both peers. It is later used
@@ -103,6 +111,16 @@ class TxReconciliationTracker::Impl {
      * easier to estimate set differene size.
      */
     std::deque<NodeId> m_queue GUARDED_BY(m_mutex);
+
+    /**
+     * Reconciliations are requested periodically:
+     * every RECON_REQUEST_INTERVAL seconds we pick a peer from the queue.
+     */
+    std::chrono::microseconds m_next_recon_request{0};
+    void UpdateNextReconRequest(std::chrono::microseconds now) EXCLUSIVE_LOCKS_REQUIRED(m_mutex)
+    {
+        m_next_recon_request = now + RECON_REQUEST_INTERVAL / m_queue.size();
+    }
 
     public:
 
