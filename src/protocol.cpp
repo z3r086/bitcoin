@@ -48,7 +48,7 @@ const char *SENDTXRCNCL="sendtxrcncl";
 const char *REQTXRCNCL="reqtxrcncl";
 const char* SKETCH = "sketch";
 const char* RECONCILDIFF = "reconcildiff";
-const char *REQSKETCHEXT="reqsketchext";
+const char* REQSKETCHEXT = "reqsketchext";
 } // namespace NetMsgType
 
 /** All known message types. Keep this in the same order as the list of
