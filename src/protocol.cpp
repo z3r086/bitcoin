@@ -47,7 +47,8 @@ const char *WTXIDRELAY="wtxidrelay";
 const char *SENDTXRCNCL="sendtxrcncl";
 const char *REQTXRCNCL="reqtxrcncl";
 const char* SKETCH = "sketch";
-const char *RECONCILDIFF="reconcildiff";
+const char* RECONCILDIFF = "reconcildiff";
+const char *REQSKETCHEXT="reqsketchext";
 } // namespace NetMsgType
 
 /** All known message types. Keep this in the same order as the list of
@@ -92,6 +93,7 @@ const static std::string allNetMessageTypes[] = {
     NetMsgType::REQTXRCNCL,
     NetMsgType::SKETCH,
     NetMsgType::RECONCILDIFF,
+    NetMsgType::REQSKETCHEXT,
 };
 const static std::vector<std::string> allNetMessageTypesVec(std::begin(allNetMessageTypes), std::end(allNetMessageTypes));
 
