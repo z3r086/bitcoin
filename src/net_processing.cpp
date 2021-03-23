@@ -4463,7 +4463,7 @@ public:
         m_wtxid_relay = use_wtxid;
     }
 
-    bool operator()(std::map<uint256, bool>::iterator a, std::map<uint256, bool>::iterator b)
+    bool operator()(std::unordered_map<uint256, bool>::iterator a, std::unordered_map<uint256, bool>::iterator b)
     {
         /* As std::make_heap produces a max-heap, we want the entries with the
          * fewest ancestors/highest fee to sort later. */
@@ -4797,9 +4797,9 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                 // Determine transactions to relay
                 if (fSendTrickle) {
                     // Produce a vector with all candidates for sending
-                    std::vector<std::map<uint256, bool>::iterator> vInvTx;
+                    std::vector<std::unordered_map<uint256, bool>::iterator> vInvTx;
                     vInvTx.reserve(pto->m_tx_relay->m_txs_to_announce.size());
-                    for (std::map<uint256, bool>::iterator it = pto->m_tx_relay->m_txs_to_announce.begin(); it != pto->m_tx_relay->m_txs_to_announce.end(); it++) {
+                    for (std::unordered_map<uint256, bool>::iterator it = pto->m_tx_relay->m_txs_to_announce.begin(); it != pto->m_tx_relay->m_txs_to_announce.end(); it++) {
                         vInvTx.push_back(it);
                     }
                     const CFeeRate filterrate{pto->m_tx_relay->minFeeFilter.load()};
@@ -4814,7 +4814,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                     while (!vInvTx.empty() && nRelayedTransactions < INVENTORY_BROADCAST_MAX) {
                         // Fetch the top element from the heap
                         std::pop_heap(vInvTx.begin(), vInvTx.end(), compareInvMempoolOrder);
-                        std::map<uint256, bool>::iterator it = vInvTx.back();
+                        std::unordered_map<uint256, bool>::iterator it = vInvTx.back();
                         vInvTx.pop_back();
                         uint256 hash = it->first;
                         CInv inv(state.m_wtxid_relay ? MSG_WTX : MSG_TX, hash);

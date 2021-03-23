@@ -26,6 +26,7 @@
 #include <threadinterrupt.h>
 #include <uint256.h>
 #include <util/check.h>
+#include <util/hasher.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -34,6 +35,7 @@
 #include <map>
 #include <memory>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 class CScheduler;
@@ -585,8 +587,7 @@ public:
         // - true: flood to those with flood_to=true, reconcile with the rest
         // - false: reconcile with all
         // Transactions are sorted by the mempool before relay, so the order is not important.
-        // TODO: switch to unordered_map.
-        std::map<uint256, bool> m_txs_to_announce;
+        std::unordered_map<uint256, bool, TxidHasher> m_txs_to_announce;
         // Used for BIP35 mempool sending
         bool fSendMempool GUARDED_BY(cs_tx_inventory){false};
         // Last time a "MEMPOOL" request was serviced.

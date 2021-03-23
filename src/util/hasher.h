@@ -9,6 +9,11 @@
 #include <primitives/transaction.h>
 #include <uint256.h>
 
+struct TxidHasher
+{
+    size_t operator()(const uint256& txid) const { return ReadLE64(txid.begin()); }
+};
+
 class SaltedTxidHasher
 {
 private:
