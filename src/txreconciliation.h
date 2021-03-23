@@ -66,6 +66,12 @@ class TxReconciliationTracker {
         bool recon_requestor, bool recon_responder, uint32_t recon_version, uint64_t remote_salt,
         size_t outbound_flooders);
 
+    /**
+     * Step 1. Add new transactions we want to announce to the peer to the local reconciliation set
+     * of the peer, so that those transactions will be reconciled later.
+     */
+    void StoreTxsToAnnounce(NodeId peer_id, const std::vector<uint256>& txs_to_reconcile);
+
     // Helpers
 
     /**
