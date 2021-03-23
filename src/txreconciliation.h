@@ -91,6 +91,12 @@ class TxReconciliationTracker {
      * If the peer was not previously registered for reconciliations, returns nullopt.
      */
     std::optional<bool> IsPeerResponder(NodeId peer_id) const;
+
+    /**
+     * Returns the size of the reconciliation set we have locally for the given peer.
+     * If the peer was not previously registered for reconciliations, returns nullopt.
+     */
+    std::optional<size_t> GetPeerSetSize(NodeId peer_id) const;
 };
 
 #endif // BITCOIN_TXRECONCILIATION_H

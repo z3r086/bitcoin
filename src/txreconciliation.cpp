@@ -181,6 +181,17 @@ class TxReconciliationTracker::Impl {
         }
         return (*recon_state).second.m_we_initiate;
     }
+
+    std::optional<size_t> GetPeerSetSize(NodeId peer_id) const
+    {
+        LOCK(m_mutex);
+        auto recon_state = m_states.find(peer_id);
+        if (recon_state == m_states.end()) {
+            return std::nullopt;
+        }
+        return (*recon_state).second.m_local_set.size();
+    }
+
 };
 
 TxReconciliationTracker::TxReconciliationTracker() :
@@ -219,4 +230,9 @@ std::optional<bool> TxReconciliationTracker::IsPeerChosenForFlooding(NodeId peer
 std::optional<bool> TxReconciliationTracker::IsPeerResponder(NodeId peer_id) const
 {
     return m_impl->IsPeerResponder(peer_id);
+}
+
+std::optional<size_t> TxReconciliationTracker::GetPeerSetSize(NodeId peer_id) const
+{
+    return m_impl->GetPeerSetSize(peer_id);
 }
