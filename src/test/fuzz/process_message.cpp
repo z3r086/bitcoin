@@ -127,6 +127,7 @@ FUZZ_TARGET_MSG(merkleblock);
 FUZZ_TARGET_MSG(notfound);
 FUZZ_TARGET_MSG(ping);
 FUZZ_TARGET_MSG(pong);
+FUZZ_TARGET_MSG(reqtxrcncl);
 FUZZ_TARGET_MSG(sendaddrv2);
 FUZZ_TARGET_MSG(sendcmpct);
 FUZZ_TARGET_MSG(sendheaders);

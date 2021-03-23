@@ -144,4 +144,91 @@ BOOST_AUTO_TEST_CASE(IsAlreadyInPeerSet)
     BOOST_CHECK(!tracker.IsAlreadyInPeerSet(peer_id0, wtxid));
 }
 
+BOOST_AUTO_TEST_CASE(MaybeRequestReconciliation)
+{
+    TxReconciliationTracker tracker(1);
+    NodeId peer_id0 = 0;
+    SetMockTime(1);
+
+    BOOST_REQUIRE(!tracker.IsPeerRegistered(peer_id0));
+    BOOST_CHECK(tracker.MaybeRequestReconciliation(peer_id0) == std::nullopt);
+
+    tracker.PreRegisterPeer(peer_id0);
+    BOOST_REQUIRE(!tracker.IsPeerRegistered(peer_id0));
+    BOOST_CHECK(tracker.MaybeRequestReconciliation(peer_id0) == std::nullopt);
+
+    BOOST_REQUIRE_EQUAL(tracker.RegisterPeer(peer_id0, false, 1, 1), ReconciliationRegisterResult::SUCCESS);
+
+    {
+        const auto reconciliation_request_params = tracker.MaybeRequestReconciliation(peer_id0);
+        BOOST_CHECK(reconciliation_request_params != std::nullopt);
+        const auto [local_set_size, local_q_formatted] = (*reconciliation_request_params);
+        BOOST_CHECK_EQUAL(local_set_size, 0);
+        BOOST_CHECK_EQUAL(local_q_formatted, uint16_t(32767 * 0.25));
+    }
+
+    SetMockTime(1 + 7);
+    // Even with non-empty set, the response is nullopt because not enough time has passed.
+    {
+        tracker.AddToSet(peer_id0, std::vector<uint256>{GetRandHash(), GetRandHash(), GetRandHash()});
+        const auto reconciliation_request_params = tracker.MaybeRequestReconciliation(peer_id0);
+        BOOST_CHECK(reconciliation_request_params == std::nullopt);
+    }
+
+    // Enough time passed, but the previous reconciliation is still pending.
+    SetMockTime(1 + 9);
+    {
+        tracker.AddToSet(peer_id0, std::vector<uint256>{GetRandHash(), GetRandHash(), GetRandHash()});
+        const auto reconciliation_request_params = tracker.MaybeRequestReconciliation(peer_id0);
+        BOOST_CHECK(reconciliation_request_params == std::nullopt);
+    }
+
+    // TODO: expand these tests once there is a way to drop the pending reconciliation.
+
+    // Start fresh
+    SetMockTime(100);
+    tracker.ForgetPeer(peer_id0);
+    {
+        tracker.PreRegisterPeer(peer_id0);
+        BOOST_REQUIRE_EQUAL(tracker.RegisterPeer(peer_id0, false, 1, 1), ReconciliationRegisterResult::SUCCESS);
+        tracker.AddToSet(peer_id0, std::vector<uint256>{GetRandHash(), GetRandHash(), GetRandHash()});
+        const auto reconciliation_request_params = tracker.MaybeRequestReconciliation(peer_id0);
+        BOOST_CHECK(reconciliation_request_params != std::nullopt);
+        const auto [local_set_size, local_q_formatted] = (*reconciliation_request_params);
+        BOOST_CHECK_EQUAL(local_set_size, 3);
+        BOOST_CHECK_EQUAL(local_q_formatted, uint16_t(32767 * 0.25));
+    }
+
+    // Two-peer setup
+    tracker.ForgetPeer(peer_id0);
+    NodeId peer_id1 = 1;
+    NodeId peer_id2 = 2;
+    SetMockTime(200);
+    {
+        tracker.PreRegisterPeer(peer_id1);
+        tracker.PreRegisterPeer(peer_id2);
+        BOOST_REQUIRE_EQUAL(tracker.RegisterPeer(peer_id1, false, 1, 1), ReconciliationRegisterResult::SUCCESS);
+        BOOST_REQUIRE_EQUAL(tracker.RegisterPeer(peer_id2, false, 1, 1), ReconciliationRegisterResult::SUCCESS);
+
+        // First, one of the peers is chosen.
+        auto reconciliation_request_params1 = tracker.MaybeRequestReconciliation(peer_id1);
+        auto reconciliation_request_params2 = tracker.MaybeRequestReconciliation(peer_id2);
+        BOOST_CHECK(reconciliation_request_params1 != std::nullopt);
+        BOOST_CHECK(reconciliation_request_params2 == std::nullopt);
+
+        // Immediately after, neither should be chosen — not enough time passed.
+        reconciliation_request_params1 = tracker.MaybeRequestReconciliation(peer_id1);
+        reconciliation_request_params2 = tracker.MaybeRequestReconciliation(peer_id2);
+        BOOST_CHECK(reconciliation_request_params1 == std::nullopt);
+        BOOST_CHECK(reconciliation_request_params2 == std::nullopt);
+
+        // After the delay, the other one should be chosen.
+        SetMockTime(200 + 9);
+        reconciliation_request_params1 = tracker.MaybeRequestReconciliation(peer_id1);
+        reconciliation_request_params2 = tracker.MaybeRequestReconciliation(peer_id2);
+        BOOST_CHECK(reconciliation_request_params1 == std::nullopt);
+        BOOST_CHECK(reconciliation_request_params2 != std::nullopt);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
