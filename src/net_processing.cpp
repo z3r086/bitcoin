@@ -80,7 +80,9 @@ static constexpr int32_t MAX_PEER_TX_REQUEST_IN_FLIGHT = 100;
 /** Maximum number of transactions to consider for requesting, per peer. It provides a reasonable DoS limit to
  *  per-peer memory usage spent on announcements, while covering peers continuously sending INVs at the maximum
  *  rate (by our own policy, see INVENTORY_BROADCAST_PER_SECOND) for several minutes, while not receiving
- *  the actual transaction (from any peer) in response to requests for them. */
+ *  the actual transaction (from any peer) in response to requests for them.
+ *  Also limits a maximum number of elements to store in the reconciliation set.
+ */
 static constexpr int32_t MAX_PEER_TX_ANNOUNCEMENTS = 5000;
 /** How long to delay requesting transactions via txids, if we have wtxid-relaying peers */
 static constexpr auto TXID_RELAY_DELAY = std::chrono::seconds{2};
@@ -4776,16 +4778,19 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
             }
             peer->m_blocks_for_inv_relay.clear();
 
+            const bool supports_recon = m_reconciliation.IsPeerRegistered(pto->GetId());
             if (pto->m_tx_relay != nullptr) {
                 LOCK(pto->m_tx_relay->cs_tx_inventory);
                 // Check whether periodic sends should happen
                 bool fSendTrickle = pto->HasPermission(PF_NOBAN);
                 if (pto->m_tx_relay->nNextInvSend < current_time) {
                     fSendTrickle = true;
-                    if (pto->IsInboundConn()) {
+                    if (!supports_recon && pto->IsInboundConn()) {
                         pto->m_tx_relay->nNextInvSend = std::chrono::microseconds{m_connman.PoissonNextSendInbound(count_microseconds(current_time), INVENTORY_BROADCAST_INTERVAL)};
                     } else {
                         // Use half the delay for outbound peers, as there is less privacy concern for them.
+                        // Also use half delay for inbound peers if they use reconciliations,
+                        // because we have an additional delay for sending out requested sketches.
                         pto->m_tx_relay->nNextInvSend = PoissonNextSend(current_time, std::chrono::seconds{INVENTORY_BROADCAST_INTERVAL >> 1});
                     }
                 }
@@ -4831,6 +4836,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                     // Produce a vector with all candidates for sending
                     std::vector<std::unordered_map<uint256, bool>::iterator> vInvTx;
                     vInvTx.reserve(pto->m_tx_relay->m_txs_to_announce.size());
+                    std::vector<uint256> txs_to_reconcile;
                     for (std::unordered_map<uint256, bool>::iterator it = pto->m_tx_relay->m_txs_to_announce.begin(); it != pto->m_tx_relay->m_txs_to_announce.end(); it++) {
                         vInvTx.push_back(it);
                     }
@@ -4870,7 +4876,40 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                         if (pto->m_tx_relay->pfilter && !pto->m_tx_relay->pfilter->IsRelevantAndUpdate(*txinfo.tx)) continue;
                         // Send
                         State(pto->GetId())->m_recently_announced_invs.insert(hash);
-                        vInv.push_back(inv);
+
+                        bool flood_tx = it->second;
+                        bool added_to_recon_set = false;
+                        // Check if peer supports reconciliations.
+                        if (supports_recon) {
+                            // Check if reconciliation set is not at capacity for two reasons:
+                            // - limit sizes of reconciliation sets and short id mappings
+                            // - limit CPU use for sketch computations
+                            //
+                            // Since we reconcile frequently, reaching capacity either means:
+                            // (1) a peer for some reason does not request reconciliations from us for a long while, or
+                            // (2) really a lot of valid fee-paying transactions were dumped on us at once.
+                            // We don't care about a laggy peer (1) because we probably can't help them even if we flood transactions.
+                            // However, exploiting (2) should not prevent us from relaying certain transactions.
+                            //
+                            // Transactions which don't make it to the set due to the limit are announced via flooding.
+                            const size_t recon_set_size = *m_reconciliation.GetPeerSetSize(pto->GetId());
+                            if (txs_to_reconcile.size() + recon_set_size < MAX_PEER_TX_ANNOUNCEMENTS) {
+                                // Check that:
+                                // 1) the peer isn't set for flooding OR
+                                // 2) the transaction isn't set for flooding
+                                const bool recon_peer_flood_to = *m_reconciliation.IsPeerChosenForFlooding(pto->GetId());
+                                if (!recon_peer_flood_to || !flood_tx) {
+                                    txs_to_reconcile.push_back(wtxid);
+                                    added_to_recon_set = true;
+                                }
+                            }
+                        }
+
+                        // If not added to the reconciliation set, flood.
+                        if (!added_to_recon_set) {
+                            vInv.push_back(inv);
+                        }
+
                         nRelayedTransactions++;
                         {
                             // Expire old relay messages
@@ -4903,6 +4942,11 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                             // ProcessGetData().
                             pto->m_tx_relay->filterInventoryKnown.insert(txid);
                         }
+                    }
+
+                    // Populating local reconciliation set.
+                    if (txs_to_reconcile.size() != 0) {
+                        m_reconciliation.StoreTxsToAnnounce(pto->GetId(), txs_to_reconcile);
                     }
                 }
             }
