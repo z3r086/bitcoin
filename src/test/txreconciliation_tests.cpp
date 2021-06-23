@@ -77,4 +77,32 @@ BOOST_AUTO_TEST_CASE(IsPeerRegisteredTest)
     BOOST_CHECK(!tracker.IsPeerRegistered(peer_id0));
 }
 
+BOOST_AUTO_TEST_CASE(ShouldFloodToTest)
+{
+    TxReconciliationTracker tracker(1);
+    NodeId peer_id0 = 0;
+
+    // If peer is not registered for reconciliation, it should be always chosen for flooding.
+    // It's possible this peer is completely unknown to us, but that check is out of scope for
+    // reconciliation tracker.
+    BOOST_REQUIRE(!tracker.IsPeerRegistered(peer_id0));
+    for (int i = 0; i < 1000; ++i) {
+        BOOST_CHECK(tracker.ShouldFloodTo(peer_id0, GetRandHash()));
+    }
+    tracker.PreRegisterPeer(peer_id0);
+    BOOST_REQUIRE(!tracker.IsPeerRegistered(peer_id0));
+    // Same after pre-registering.
+    for (int i = 0; i < 1000; ++i) {
+        BOOST_CHECK(tracker.ShouldFloodTo(peer_id0, GetRandHash()));
+    }
+
+    // Once the peer is registered, it should be selected for flooding of some transactions.
+    BOOST_REQUIRE_EQUAL(tracker.RegisterPeer(peer_id0, true, 1, 1), ReconciliationRegisterResult::SUCCESS);
+    size_t selected = 0;
+    for (int i = 0; i < 1000; ++i) {
+        selected += tracker.ShouldFloodTo(peer_id0, GetRandHash());
+    }
+    BOOST_CHECK(selected > 0);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

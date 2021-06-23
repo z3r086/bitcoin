@@ -5,8 +5,10 @@
 #include <node/txreconciliation.h>
 
 #include <util/check.h>
+#include <util/hasher.h>
 #include <util/system.h>
 
+#include <cmath>
 #include <unordered_map>
 #include <variant>
 
@@ -16,6 +18,18 @@ namespace {
 /** Static salt component used to compute short txids for sketch construction, see BIP-330. */
 const std::string RECON_STATIC_SALT = "Tx Relay Salting";
 const HashWriter RECON_SALT_HASHER = TaggedHash(RECON_STATIC_SALT);
+
+/**
+ * Announce transactions via full wtxid to a limited number of inbound and outbound peers.
+ * Justification for these values are provided here:
+ * https://github.com/naumenkogs/txrelaysim/issues/7#issuecomment-902165806 */
+constexpr double INBOUND_FANOUT_DESTINATIONS_FRACTION = 0.1;
+constexpr double OUTBOUND_FANOUT_DESTINATIONS = 1;
+/**
+ * If there's a chance a transaction is not streamlined along the first couple hops, it would take
+ *  very long to relay.
+ */
+static_assert(OUTBOUND_FANOUT_DESTINATIONS >= 1);
 
 /**
  * Salt (specified by BIP-330) constructed from contributions from both peers. It is used
@@ -71,6 +85,12 @@ class TxReconciliationTracker::Impl
 {
 private:
     mutable Mutex m_txreconciliation_mutex;
+
+    /**
+     * We need a ReconciliationTracker-wide randomness to decide to which peers we should flood a
+     * given transaction based on a (w)txid.
+     */
+    const SaltedTxidHasher txidHasher;
 
     // Local protocol version
     uint32_t m_recon_version;
@@ -176,6 +196,69 @@ public:
         return (recon_state != m_states.end() &&
                 std::holds_alternative<TxReconciliationState>(recon_state->second));
     }
+
+    bool ShouldFloodTo(NodeId peer_id, const uint256& wtxid) const EXCLUSIVE_LOCKS_REQUIRED(!m_txreconciliation_mutex)
+    {
+        AssertLockNotHeld(m_txreconciliation_mutex);
+        if (!IsPeerRegistered(peer_id)) return true;
+        LOCK(m_txreconciliation_mutex);
+        const auto recon_state = std::get<TxReconciliationState>(m_states.find(peer_id)->second);
+
+        // We assume that reconciliation is always initiated from inbound to outbound to avoid
+        // code complexity.
+        std::vector<NodeId> eligible_peers;
+
+        const bool we_initiate = recon_state.m_we_initiate;
+        // Find all peers of the same reconciliation direction.
+        std::for_each(m_states.begin(), m_states.end(),
+                      [&eligible_peers, we_initiate](auto indexed_state) {
+                          const auto& cur_state = std::get<TxReconciliationState>(indexed_state.second);
+                          if (cur_state.m_we_initiate == we_initiate) eligible_peers.push_back(indexed_state.first);
+                      });
+
+        // We found the peer above, so it must be in this list.
+        assert(eligible_peers.size() >= 1);
+
+        // Flooding to a fraction (say, 10% of peers) is equivalent to taking the first 10% of
+        // of the eligible peers. Sometimes it won't round to a "full peer", in that case we'll
+        // roll the dice with the corresponding probability.
+        double flood_targets;
+        if (we_initiate) {
+            flood_targets = OUTBOUND_FANOUT_DESTINATIONS;
+        } else {
+            flood_targets = eligible_peers.size() * INBOUND_FANOUT_DESTINATIONS_FRACTION;
+            if (flood_targets == 0) return false;
+        }
+
+        const size_t round_down_flood_targets = floor(flood_targets);
+
+        const auto it = std::find(eligible_peers.begin(), eligible_peers.end(), peer_id);
+        Assume(it != eligible_peers.end());
+        const size_t peer_position = it - eligible_peers.begin();
+        // The requirements to this algorithm is the following:
+        // 1. Every transaction should be assigned to *some* peer, at least assuming a static list
+        // of peers. For this function that means no randomness.
+        // 2. The choice doesn't leak the internal order of peers (m_states) to the external
+        // observer. This is achieved by hashing the txid.
+        //
+        // Say, we have 2.4 targets out of 20 inbound peers, the wtixd hash is 217, and our peer_id
+        // holds peer_position in the list of inbound peers.
+        // We will compute 217 % 20 = 17, as if it was a "starting_point", from which we see if
+        // the target is within a range of 2.4. It's impossible for the range to exceed
+        // the bounds because of how we computed them in the first place.
+        // For that, we need to check the following:
+        // 1. If 17 <= peer_position < 19, return true.
+        // 2. If peer_position = 19, roll the dice with the remaining probability (0.4).
+        // 3. Otherwise, return false.
+        const size_t starting_point = txidHasher(wtxid) % eligible_peers.size();
+        if (starting_point <= peer_position && peer_position < starting_point + round_down_flood_targets) {
+            return true;
+        } else if (peer_position == starting_point + round_down_flood_targets) {
+            return rand() < (flood_targets - round_down_flood_targets) * RAND_MAX;
+        } else {
+            return false;
+        }
+    }
 };
 
 TxReconciliationTracker::TxReconciliationTracker(uint32_t recon_version) : m_impl{std::make_unique<TxReconciliationTracker::Impl>(recon_version)} {}
@@ -211,4 +294,9 @@ void TxReconciliationTracker::ForgetPeer(NodeId peer_id)
 bool TxReconciliationTracker::IsPeerRegistered(NodeId peer_id) const
 {
     return m_impl->IsPeerRegistered(peer_id);
+}
+
+bool TxReconciliationTracker::ShouldFloodTo(NodeId peer_id, const uint256& wtxid) const
+{
+    return m_impl->ShouldFloodTo(peer_id, wtxid);
 }
