@@ -83,7 +83,9 @@ static constexpr int32_t MAX_PEER_TX_REQUEST_IN_FLIGHT = 100;
 /** Maximum number of transactions to consider for requesting, per peer. It provides a reasonable DoS limit to
  *  per-peer memory usage spent on announcements, while covering peers continuously sending INVs at the maximum
  *  rate (by our own policy, see INVENTORY_BROADCAST_PER_SECOND) for several minutes, while not receiving
- *  the actual transaction (from any peer) in response to requests for them. */
+ *  the actual transaction (from any peer) in response to requests for them.
+ *  Also limits a maximum number of elements to store in the reconciliation set.
+ */
 static constexpr int32_t MAX_PEER_TX_ANNOUNCEMENTS = 5000;
 /** How long to delay requesting transactions via txids, if we have wtxid-relaying peers */
 static constexpr auto TXID_RELAY_DELAY = std::chrono::seconds{2};
@@ -4842,6 +4844,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                     // especially since we have many peers and some will draw much shorter delays.
                     unsigned int nRelayedTransactions = 0;
                     LOCK(pto->m_tx_relay->cs_filter);
+                    std::vector<uint256> txs_to_reconcile;
                     while (!vInvTx.empty() && nRelayedTransactions < INVENTORY_BROADCAST_MAX) {
                         // Fetch the top element from the heap
                         std::pop_heap(vInvTx.begin(), vInvTx.end(), compareInvMempoolOrder);
@@ -4869,7 +4872,62 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                         if (pto->m_tx_relay->pfilter && !pto->m_tx_relay->pfilter->IsRelevantAndUpdate(*txinfo.tx)) continue;
                         // Send
                         State(pto->GetId())->m_recently_announced_invs.insert(hash);
-                        vInv.push_back(inv);
+
+                        bool adding_to_recon_set = false;
+                        // Check if peer supports reconciliations.
+                        if (m_reconciliation.IsPeerRegistered(pto->GetId())) {
+                            bool flood_target = true;
+                            size_t ancestors, descendants;
+                            m_mempool.GetTransactionAncestry(txid, ancestors, descendants);
+                            if (descendants > 1) {
+                                // If there are unconfirmed children in the mempool, always flood,
+                                // so that the parent transaction arrives early and avoids
+                                // triggering mempool descendants limits.
+                                // Topologically sorting above is important to make this work.
+                                flood_target = true;
+                                // This won't work in the following case:
+                                // 1. The parent is set for reconciliation because the child is not
+                                //    in the mempool yet.
+                                // 2. The child arrives to the mempool and is flooded.
+                                // 3. The peer receives the child earlier than the parent.
+                                // For this case, the next condition is used.
+                            } else if (ancestors > 1) {
+                                // There is a risk of relaying a child before the parent and thus
+                                // triggering mempool limits (see above).
+                                // We will just be too restrictive about flooding and always
+                                // reconcile these kind of child transactions.
+                                // Note, this could result in high latencies in relaying childs
+                                // of unconfirmed parents.
+                                flood_target = false;
+                            } else {
+                                // Reconcile if this reconciling peer is not selected for low
+                                // fan-out flooding.
+                                flood_target = m_reconciliation.ShouldFloodTo(wtxid, pto->GetId());
+                            }
+
+                            // Check if reconciliation set is not at capacity for two reasons:
+                            // - limit sizes of reconciliation sets and short id mappings
+                            // - limit CPU use for sketch computations
+                            //
+                            // Since we reconcile frequently, reaching capacity either means:
+                            // (1) a peer for some reason does not request reconciliations from us for a long while, or
+                            // (2) really a lot of valid fee-paying transactions were dumped on us at once.
+                            // We don't care about a laggy peer (1) because we probably can't help them even if we flood transactions.
+                            // However, exploiting (2) should not prevent us from relaying certain transactions.
+                            //
+                            // Transactions which don't make it to the set due to the limit are announced via fan-out.
+                            const size_t recon_set_size = *m_reconciliation.GetPeerSetSize(pto->GetId());
+                            if (!flood_target && txs_to_reconcile.size() + recon_set_size < MAX_PEER_TX_ANNOUNCEMENTS) {
+                                txs_to_reconcile.push_back(wtxid);
+                                adding_to_recon_set = true;
+                            }
+                        }
+
+                        // If not added to the reconciliation set, flood.
+                        if (!adding_to_recon_set) {
+                            vInv.push_back(inv);
+                        }
+
                         nRelayedTransactions++;
                         {
                             // Expire old relay messages
@@ -4902,6 +4960,11 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                             // ProcessGetData().
                             pto->m_tx_relay->filterInventoryKnown.insert(txid);
                         }
+                    }
+
+                    // Populating local reconciliation set.
+                    if (txs_to_reconcile.size() != 0) {
+                        m_reconciliation.AddToReconSet(pto->GetId(), txs_to_reconcile);
                     }
                 }
         }
