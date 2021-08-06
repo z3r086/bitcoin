@@ -90,6 +90,11 @@ public:
     void TryRemovingFromSet(NodeId peer_id, const uint256& wtxid_to_remove);
 
     /**
+     * Returns the size of the reconciliation set we have locally for the given peer.
+     */
+    size_t GetPeerSetSize(NodeId peer_id) const;
+
+    /**
      * Attempts to forget txreconciliation-related state of the peer (if we previously stored any).
      * After this, we won't be able to reconcile transactions with the peer.
      */
@@ -104,6 +109,11 @@ public:
      * Returns whether the peer is chosen as a low-fanout destination for a given tx.
      */
     bool ShouldFloodTo(NodeId peer_id, const uint256& wtxid) const;
+
+    /**
+     * Check whether a particular transaction is in the reconciliation set of a given peer.
+     */
+    bool IsAlreadyInPeerSet(NodeId peer_id, const uint256& wtxid) const;
 };
 
 #endif // BITCOIN_NODE_TXRECONCILIATION_H

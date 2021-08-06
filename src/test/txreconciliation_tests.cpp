@@ -105,4 +105,39 @@ BOOST_AUTO_TEST_CASE(ShouldFloodToTest)
     BOOST_CHECK(selected > 0);
 }
 
+// Also tests related AddToSet, TryRemovingFromSet and GetPeerSetSize.
+BOOST_AUTO_TEST_CASE(IsAlreadyInPeerSet)
+{
+    TxReconciliationTracker tracker(1);
+    NodeId peer_id0 = 0;
+    uint256 wtxid = GetRandHash();
+
+    BOOST_REQUIRE(!tracker.IsPeerRegistered(peer_id0));
+    BOOST_CHECK(!tracker.IsAlreadyInPeerSet(peer_id0, wtxid));
+
+    tracker.PreRegisterPeer(peer_id0);
+    BOOST_REQUIRE(!tracker.IsPeerRegistered(peer_id0));
+    BOOST_CHECK(!tracker.IsAlreadyInPeerSet(peer_id0, wtxid));
+
+    BOOST_REQUIRE_EQUAL(tracker.RegisterPeer(peer_id0, true, 1, 1), ReconciliationRegisterResult::SUCCESS);
+    BOOST_CHECK(!tracker.IsAlreadyInPeerSet(peer_id0, wtxid));
+    BOOST_CHECK_EQUAL(tracker.GetPeerSetSize(peer_id0), 0);
+
+    tracker.AddToSet(peer_id0, std::vector<uint256>{wtxid});
+    BOOST_CHECK(tracker.IsAlreadyInPeerSet(peer_id0, wtxid));
+    BOOST_CHECK_EQUAL(tracker.GetPeerSetSize(peer_id0), 1);
+
+    tracker.TryRemovingFromSet(peer_id0, wtxid);
+    BOOST_CHECK(!tracker.IsAlreadyInPeerSet(peer_id0, wtxid));
+    BOOST_CHECK_EQUAL(tracker.GetPeerSetSize(peer_id0), 0);
+
+    // Forgetting the peer
+    tracker.AddToSet(peer_id0, std::vector<uint256>{wtxid});
+    BOOST_REQUIRE(tracker.IsAlreadyInPeerSet(peer_id0, wtxid));
+    BOOST_REQUIRE_EQUAL(tracker.GetPeerSetSize(peer_id0), 1);
+    tracker.ForgetPeer(peer_id0);
+    BOOST_REQUIRE(!tracker.IsPeerRegistered(peer_id0));
+    BOOST_CHECK(!tracker.IsAlreadyInPeerSet(peer_id0, wtxid));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
