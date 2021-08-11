@@ -415,7 +415,7 @@ class TxReconciliationTracker::Impl {
     /**
      * Keeps track of ongoing reconciliations with a given peer.
      */
-    std::unordered_map<NodeId, ReconciliationState> m_states GUARDED_BY(m_mutex);
+    std::map<NodeId, ReconciliationState> m_states GUARDED_BY(m_mutex);
 
     /**
      * Maintains a queue of reconciliations we should initiate. To achieve higher bandwidth
@@ -437,7 +437,7 @@ class TxReconciliationTracker::Impl {
         m_next_recon_request = now + (RECON_REQUEST_INTERVAL / we_initiate_to_count);
     }
 
-    bool HandleInitialSketch(std::unordered_map<NodeId, ReconciliationState>::iterator& recon_state,
+    bool HandleInitialSketch(std::map<NodeId, ReconciliationState>::iterator& recon_state,
         const std::vector<uint8_t>& skdata,
         // returning values
         std::vector<uint32_t>& txs_to_request, std::vector<uint256>& txs_to_announce, std::optional<bool>& result)
@@ -513,7 +513,7 @@ class TxReconciliationTracker::Impl {
         return true;
     }
 
-    bool HandleSketchExtension(std::unordered_map<NodeId, ReconciliationState>::iterator& recon_state,
+    bool HandleSketchExtension(std::map<NodeId, ReconciliationState>::iterator& recon_state,
         const std::vector<uint8_t>& skdata,
         // returning values
         std::vector<uint32_t>& txs_to_request, std::vector<uint256>& txs_to_announce, std::optional<bool>& result)
@@ -730,7 +730,7 @@ class TxReconciliationTracker::Impl {
             "remote_q=%d, remote_set_size=%i.\n", peer_id, peer_q_converted, peer_recon_set_size);
     }
 
-    void RespondToInitialRequest(std::unordered_map<NodeId, ReconciliationState>::iterator& recon_state, std::vector<uint8_t>& skdata)
+    void RespondToInitialRequest(std::map<NodeId, ReconciliationState>::iterator& recon_state, std::vector<uint8_t>& skdata)
     {
         // Compute a sketch over the local reconciliation set.
         uint32_t sketch_capacity = 0;
@@ -757,7 +757,7 @@ class TxReconciliationTracker::Impl {
             "sending sketch of capacity=%i.\n", recon_state->first, sketch_capacity);
     }
 
-    void RespondToExtensionRequest(std::unordered_map<NodeId, ReconciliationState>::iterator& recon_state, std::vector<uint8_t>& skdata)
+    void RespondToExtensionRequest(std::map<NodeId, ReconciliationState>::iterator& recon_state, std::vector<uint8_t>& skdata)
     {
         assert(recon_state->second.m_capacity_snapshot > 0);
         // Update local reconciliation state for the peer.
