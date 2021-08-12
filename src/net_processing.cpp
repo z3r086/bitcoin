@@ -3085,6 +3085,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
                 } else if (!fAlreadyHave && !m_chainman.ActiveChainstate().IsInitialBlockDownload()) {
                     AddTxAnnouncement(pfrom, gtxid, current_time);
                 }
+                if (gtxid.IsWtxid()) m_reconciliation.TryRemovingFromReconSet(pfrom.GetId(), gtxid.GetHash());
             } else {
                 LogPrint(BCLog::NET, "Unknown inv type \"%s\" received from peer=%d\n", inv.ToString(), pfrom.GetId());
             }
@@ -3369,6 +3370,8 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             }
             return;
         }
+
+        m_reconciliation.TryRemovingFromReconSet(pfrom.GetId(), wtxid);
 
         const MempoolAcceptResult result = AcceptToMemoryPool(m_chainman.ActiveChainstate(), m_mempool, ptx, false /* bypass_limits */);
         const TxValidationState& state = result.m_state;
