@@ -2529,6 +2529,7 @@ void PeerManagerImpl::AnnounceTxs(std::vector<uint256> remote_missing_wtxids, CN
 
         remote_missing_wtxids.pop_back();
         remote_missing_invs.push_back(CInv(MSG_WTX, wtxid));
+        LogPrint(BCLog::NET, "Announcing wtxid %s %i\n", wtxid.ToString(), pto.GetId());
 
         if (remote_missing_invs.size() == MAX_INV_SZ || remote_missing_wtxids.empty()) {
             m_connman.PushMessage(&pto, msgMaker.Make(NetMsgType::INV, remote_missing_invs));
@@ -5082,6 +5083,8 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                         if (!adding_to_recon_set) {
                             vInv.push_back(inv);
                         }
+
+                        LogPrint(BCLog::NET, "Announcing wtxid: %s to peer %i, %i\n", wtxid.ToString(), pto->GetId(), adding_to_recon_set);
 
                         nRelayedTransactions++;
                         {
