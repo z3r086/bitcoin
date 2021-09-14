@@ -962,6 +962,9 @@ private:
     void AddAddrFetch(const std::string& strDest);
     void ProcessAddrFetch();
     void ThreadOpenConnections(std::vector<std::string> connect);
+    CAddrInfo& SelectAddrCandidate(bool feeler);
+    bool CheckAddrCandidate(const CAddrInfo& addr, ConnectionType conn_type, bool feeler,
+        const std::set<std::vector<unsigned char>>& netgroups_already_connected_to, int tries);
     void ThreadMessageHandler();
     void ThreadI2PAcceptIncoming();
     void AcceptConnection(const ListenSocket& hListenSocket);

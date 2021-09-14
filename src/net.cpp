@@ -2011,73 +2011,12 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
             if (nTries > 100)
                 break;
 
-            CAddrInfo addr;
+            CAddrInfo addr = SelectAddrCandidate(fFeeler);
 
-            if (fFeeler) {
-                // First, try to get a tried table collision address. This returns
-                // an empty (invalid) address if there are no collisions to try.
-                addr = addrman.SelectTriedCollision();
-
-                if (!addr.IsValid()) {
-                    // No tried table collisions. Select a new table address
-                    // for our feeler.
-                    addr = addrman.Select(true);
-                } else if (AlreadyConnectedToAddress(addr)) {
-                    // If test-before-evict logic would have us connect to a
-                    // peer that we're already connected to, just mark that
-                    // address as Good(). We won't be able to initiate the
-                    // connection anyway, so this avoids inadvertently evicting
-                    // a currently-connected peer.
-                    addrman.Good(addr);
-                    // Select a new table address for our feeler instead.
-                    addr = addrman.Select(true);
-                }
-            } else {
-                // Not a feeler
-                addr = addrman.Select();
-            }
-
-            // The following checks are never applied to MANUAL and ADDR_FETCH,
-            // because those connections are made elsewhere.
-            assert(conn_type != ConnectionType::MANUAL && conn_type != ConnectionType::ADDR_FETCH);
-
-            // Require outbound connections, other than feelers, to be to distinct network groups
-            if (!fFeeler && setConnected.count(addr.GetGroup(addrman.GetAsmap()))) {
+            if (CheckAddrCandidate(addr, conn_type, fFeeler, setConnected, nTries)) {
+                addrConnect = addr;
                 break;
             }
-
-            // if we selected an invalid or local address, restart
-            if (!addr.IsValid() || IsLocal(addr)) {
-                break;
-            }
-
-            if (!IsReachable(addr))
-                continue;
-
-            // only consider very recently tried nodes after 30 failed attempts
-            if (nANow - addr.nLastTry < 600 && nTries < 30)
-                continue;
-
-            // for non-feelers, require all the services we'll want,
-            // for feelers, only require they be a full node (only because most
-            // SPV clients don't have a good address DB available)
-            if (!fFeeler && !HasAllDesirableServiceFlags(addr.nServices)) {
-                continue;
-            } else if (fFeeler && !MayHaveUsefulAddressDB(addr.nServices)) {
-                continue;
-            }
-
-            // Do not allow non-default ports, unless after 50 invalid
-            // addresses selected already. This is to prevent malicious peers
-            // from advertising themselves as a service on another host and
-            // port, causing a DoS attack as nodes around the network attempt
-            // to connect to it fruitlessly.
-            if (addr.GetPort() != Params().GetDefaultPort(addr.GetNetwork()) && nTries < 50) {
-                continue;
-            }
-
-            addrConnect = addr;
-            break;
         }
 
         if (addrConnect.IsValid()) {
@@ -2093,6 +2032,77 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
             OpenNetworkConnection(addrConnect, (int)setConnected.size() >= std::min(nMaxConnections - 1, 2), &grant, nullptr, conn_type);
         }
     }
+}
+
+CAddrInfo& CConnman::SelectAddrCandidate(bool feeler) {
+    CAddrInfo addr;
+    if (feeler) {
+        // First, try to get a tried table collision address. This returns
+        // an empty (invalid) address if there are no collisions to try.
+        addr = addrman.SelectTriedCollision();
+
+        if (!addr.IsValid()) {
+            // No tried table collisions. Select a new table address
+            // for our feeler.
+            addr = addrman.Select(true);
+        } else if (AlreadyConnectedToAddress(addr)) {
+            // If test-before-evict logic would have us connect to a
+            // peer that we're already connected to, just mark that
+            // address as Good(). We won't be able to initiate the
+            // connection anyway, so this avoids inadvertently evicting
+            // a currently-connected peer.
+            addrman.Good(addr);
+            // Select a new table address for our feeler instead.
+            addr = addrman.Select(true);
+        }
+    } else {
+        // Not a feeler
+        addr = addrman.Select();
+    }
+    return addr;
+}
+
+bool CConnman::CheckAddrCandidate(const CAddrInfo& addr, ConnectionType conn_type, bool feeler,
+    const std::set<std::vector<unsigned char>>& netgroups_already_connected_to, int tries) {
+    // The following checks are never applied to MANUAL and ADDR_FETCH,
+    // because those connections are made elsewhere.
+    assert(conn_type != ConnectionType::MANUAL && conn_type != ConnectionType::ADDR_FETCH);
+
+    // Require outbound connections, other than feelers, to be to distinct network groups
+    if (!feeler && netgroups_already_connected_to.count(addr.GetGroup(addrman.GetAsmap()))) {
+        return false;
+    }
+
+    // if we selected an invalid or local address, restart
+    if (!addr.IsValid() || IsLocal(addr)) {
+        return false;
+    }
+
+    if (!IsReachable(addr))
+        return false;
+
+    // only consider very recently tried nodes after 30 failed attempts
+    if (GetAdjustedTime() - addr.nLastTry < 600 && tries < 30)
+        return false;
+
+    // for non-feelers, require all the services we'll want,
+    // for feelers, only require they be a full node (only because most
+    // SPV clients don't have a good address DB available)
+    if (!feeler && !HasAllDesirableServiceFlags(addr.nServices)) {
+        return false;
+    } else if (feeler && !MayHaveUsefulAddressDB(addr.nServices)) {
+        return false;
+    }
+
+    // Do not allow non-default ports, unless after 50 invalid
+    // addresses selected already. This is to prevent malicious peers
+    // from advertising themselves as a service on another host and
+    // port, causing a DoS attack as nodes around the network attempt
+    // to connect to it fruitlessly.
+    if (addr.GetPort() != Params().GetDefaultPort(addr.GetNetwork()) && tries < 50) {
+        return false;
+    }
+    return true;
 }
 
 std::vector<CAddress> CConnman::GetCurrentBlockRelayOnlyConns() const
