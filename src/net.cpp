@@ -307,7 +307,7 @@ bool IsLocal(const CService& addr)
     return mapLocalHost.count(addr) > 0;
 }
 
-CNode* CConnman::FindNode(const CNetAddr& ip)
+CNode* CConnman::FindNode(const CNetAddr& ip) const
 {
     LOCK(cs_vNodes);
     for (CNode* pnode : vNodes) {
@@ -329,7 +329,7 @@ CNode* CConnman::FindNode(const CSubNet& subNet)
     return nullptr;
 }
 
-CNode* CConnman::FindNode(const std::string& addrName)
+CNode* CConnman::FindNode(const std::string& addrName) const
 {
     LOCK(cs_vNodes);
     for (CNode* pnode : vNodes) {
@@ -351,7 +351,7 @@ CNode* CConnman::FindNode(const CService& addr)
     return nullptr;
 }
 
-bool CConnman::AlreadyConnectedToAddress(const CAddress& addr)
+bool CConnman::AlreadyConnectedToAddress(const CAddress& addr) const
 {
     return FindNode(static_cast<CNetAddr>(addr)) || FindNode(addr.ToStringIPPort());
 }
@@ -1989,7 +1989,6 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
 
         addrman.ResolveCollisions();
 
-        int64_t nANow = GetAdjustedTime();
         int nTries = 0;
         while (!interruptNet)
         {
@@ -2011,10 +2010,13 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
             if (nTries > 100)
                 break;
 
-            CAddrInfo addr = SelectAddrCandidate(fFeeler);
+            std::optional<CAddrInfo> addr_candidate = fFeeler ?
+                SelectFeelerCandidate() : SelectPersistentPeerCandidate(setConnected);
 
-            if (CheckAddrCandidate(addr, conn_type, fFeeler, setConnected, nTries)) {
-                addrConnect = addr;
+            if (addr_candidate.has_value() &&
+                CheckAddrCandidate(addr_candidate.value(), conn_type, fFeeler, setConnected, nTries)) {
+
+                addrConnect = addr_candidate.value();
                 break;
             }
         }
@@ -2034,44 +2036,53 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
     }
 }
 
-CAddrInfo& CConnman::SelectAddrCandidate(bool feeler) {
-    CAddrInfo addr;
-    if (feeler) {
-        // First, try to get a tried table collision address. This returns
-        // an empty (invalid) address if there are no collisions to try.
-        addr = addrman.SelectTriedCollision();
+std::optional<CAddrInfo> CConnman::SelectFeelerCandidate() const {
+    // First, try to get a tried table collision address. This returns
+    // an empty (invalid) address if there are no collisions to try.
+    CAddrInfo addr = addrman.SelectTriedCollision();
 
-        if (!addr.IsValid()) {
-            // No tried table collisions. Select a new table address
-            // for our feeler.
-            addr = addrman.Select(true);
-        } else if (AlreadyConnectedToAddress(addr)) {
-            // If test-before-evict logic would have us connect to a
-            // peer that we're already connected to, just mark that
-            // address as Good(). We won't be able to initiate the
-            // connection anyway, so this avoids inadvertently evicting
-            // a currently-connected peer.
-            addrman.Good(addr);
-            // Select a new table address for our feeler instead.
-            addr = addrman.Select(true);
-        }
-    } else {
-        // Not a feeler
-        addr = addrman.Select();
+    if (!addr.IsValid()) {
+        // No tried table collisions. Select a new table address
+        // for our feeler.
+        addr = addrman.Select(true);
+    } else if (AlreadyConnectedToAddress(addr)) {
+        // If test-before-evict logic would have us connect to a
+        // peer that we're already connected to, just mark that
+        // address as Good(). We won't be able to initiate the
+        // connection anyway, so this avoids inadvertently evicting
+        // a currently-connected peer.
+        addrman.Good(addr);
+        // Select a new table address for our feeler instead.
+        addr = addrman.Select(true);
+    }
+
+    // Require they be a full node (only because most SPV clients don't have
+    // a good address DB available).
+    if (!MayHaveUsefulAddressDB(addr.nServices)) return std::nullopt;
+    return addr;
+}
+
+std::optional<CAddrInfo> CConnman::SelectPersistentPeerCandidate(
+    const std::set<std::vector<unsigned char>>& already_connected_netgroups) const
+{
+    CAddrInfo addr = addrman.Select();
+    // Require outbound connections, other than feelers, to be to distinct network groups
+    if (already_connected_netgroups.count(addr.GetGroup(addrman.GetAsmap()))) {
+        return std::nullopt;
+    }
+    // for non-feelers, require all the services we'll want,
+    if (!HasAllDesirableServiceFlags(addr.nServices)) {
+        return std::nullopt;
     }
     return addr;
 }
 
 bool CConnman::CheckAddrCandidate(const CAddrInfo& addr, ConnectionType conn_type, bool feeler,
-    const std::set<std::vector<unsigned char>>& netgroups_already_connected_to, int tries) {
+    const std::set<std::vector<unsigned char>>& netgroups_already_connected_to, int tries) const
+{
     // The following checks are never applied to MANUAL and ADDR_FETCH,
     // because those connections are made elsewhere.
     assert(conn_type != ConnectionType::MANUAL && conn_type != ConnectionType::ADDR_FETCH);
-
-    // Require outbound connections, other than feelers, to be to distinct network groups
-    if (!feeler && netgroups_already_connected_to.count(addr.GetGroup(addrman.GetAsmap()))) {
-        return false;
-    }
 
     // if we selected an invalid or local address, restart
     if (!addr.IsValid() || IsLocal(addr)) {
@@ -2084,15 +2095,6 @@ bool CConnman::CheckAddrCandidate(const CAddrInfo& addr, ConnectionType conn_typ
     // only consider very recently tried nodes after 30 failed attempts
     if (GetAdjustedTime() - addr.nLastTry < 600 && tries < 30)
         return false;
-
-    // for non-feelers, require all the services we'll want,
-    // for feelers, only require they be a full node (only because most
-    // SPV clients don't have a good address DB available)
-    if (!feeler && !HasAllDesirableServiceFlags(addr.nServices)) {
-        return false;
-    } else if (feeler && !MayHaveUsefulAddressDB(addr.nServices)) {
-        return false;
-    }
 
     // Do not allow non-default ports, unless after 50 invalid
     // addresses selected already. This is to prevent malicious peers

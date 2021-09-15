@@ -962,9 +962,11 @@ private:
     void AddAddrFetch(const std::string& strDest);
     void ProcessAddrFetch();
     void ThreadOpenConnections(std::vector<std::string> connect);
-    CAddrInfo& SelectAddrCandidate(bool feeler);
+    std::optional<CAddrInfo> SelectFeelerCandidate() const;
+    std::optional<CAddrInfo> SelectPersistentPeerCandidate(
+        const std::set<std::vector<unsigned char>>& already_connected_netgroups) const;
     bool CheckAddrCandidate(const CAddrInfo& addr, ConnectionType conn_type, bool feeler,
-        const std::set<std::vector<unsigned char>>& netgroups_already_connected_to, int tries);
+        const std::set<std::vector<unsigned char>>& netgroups_already_connected_to, int tries) const;
     void ThreadMessageHandler();
     void ThreadI2PAcceptIncoming();
     void AcceptConnection(const ListenSocket& hListenSocket);
@@ -994,16 +996,16 @@ private:
 
     uint64_t CalculateKeyedNetGroup(const CAddress& ad) const;
 
-    CNode* FindNode(const CNetAddr& ip);
+    CNode* FindNode(const CNetAddr& ip) const;
     CNode* FindNode(const CSubNet& subNet);
-    CNode* FindNode(const std::string& addrName);
+    CNode* FindNode(const std::string& addrName) const;
     CNode* FindNode(const CService& addr);
 
     /**
      * Determine whether we're already connected to a given address, in order to
      * avoid initiating duplicate connections.
      */
-    bool AlreadyConnectedToAddress(const CAddress& addr);
+    bool AlreadyConnectedToAddress(const CAddress& addr) const;
 
     bool AttemptToEvictConnection();
     CNode* ConnectNode(CAddress addrConnect, const char *pszDest, bool fCountFailure, ConnectionType conn_type);
