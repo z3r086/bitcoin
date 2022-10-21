@@ -82,15 +82,13 @@ public:
     {
         AssertLockNotHeld(m_txreconciliation_mutex);
         LOCK(m_txreconciliation_mutex);
-        // We do not support txreconciliation salt/version updates.
-        assert(m_states.find(peer_id) == m_states.end());
 
         LogPrintLevel(BCLog::TXRECONCILIATION, BCLog::Level::Debug, "Pre-register peer=%d\n", peer_id);
         const uint64_t local_salt{GetRand(UINT64_MAX)};
 
         // We do this exactly once per peer (which are unique by NodeId, see GetNewNodeId) so it's
         // safe to assume we don't have this record yet.
-        Assert(m_states.emplace(peer_id, local_salt).second);
+        Assume(m_states.emplace(peer_id, local_salt).second);
         return local_salt;
     }
 
@@ -105,7 +103,7 @@ public:
         if (recon_state == m_states.end()) return ReconciliationRegisterResult::NOT_FOUND;
         uint64_t* local_salt = std::get_if<uint64_t>(&recon_state->second);
         // A peer is already registered. This should be checked by the caller.
-        Assume(local_salt);
+        assert(local_salt);
 
         // If the peer supports the version which is lower than ours, we downgrade to the version
         // it supports. For now, this only guarantees that nodes with future reconciliation
