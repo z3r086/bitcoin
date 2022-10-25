@@ -3531,14 +3531,17 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         const ReconciliationRegisterResult result = m_txreconciliation->RegisterPeer(pfrom.GetId(), pfrom.IsInboundConn(),
                                                                                 peer_txreconcl_version, remote_salt);
 
-        // If it's a protocol violation, disconnect.
-        // If the peer was not found (but something unexpected happened) or it was registered,
-        // nothing to be done.
         if (result == ReconciliationRegisterResult::PROTOCOL_VIOLATION) {
             LogPrintLevel(BCLog::NET, BCLog::Level::Debug, "txreconciliation protocol violation from peer=%d; disconnecting\n", pfrom.GetId());
             pfrom.fDisconnect = true;
             return;
         }
+
+        if (result == ReconciliationRegisterResult::NOT_FOUND) {
+            LogPrintLevel(BCLog::NET, BCLog::Level::Debug, "Ignore unexpected txreconciliation signal from peer=%d\n", pfrom.GetId());
+            return;
+        }
+
         return;
     }
 
